@@ -18,7 +18,7 @@ typedef int SOCKET;
 #define MESSAGE_MAX_SIZE 1024
 #define COMMAND_LENGTH 128
 #define COMMAND_SIZE 4
-#define FILE_PATH "E:\\qwerty.mp4"
+#define FILE_PATH "/home/valex/workspace/spolks/in/file.webm"
 #define INVALID_SOCKET -1
 #define SOCKET_ERROR -1
 
@@ -188,7 +188,7 @@ void serverProccess(SOCKET serverSock, SOCKET &clientSock) {
 		else if (!strcmp(buffer, "UPLOAD")) {
 			nowRecv = recv(clientSock, buffer, 1, 0);
 			buffer[nowRecv] = '\0';
-			FILE *file = fopen("E:\\out.mp4", "a+b");
+			FILE *file = fopen("/home/valex/workspace/spolks/out/file.webm", "a+b");
 			if (canContinue) {
 				fseek(file, 0, SEEK_END);
 			}
