@@ -1,9 +1,9 @@
 //#include <winsock2.h>
-#include <cstdlib>
+#include <stdlib.h>
 #include <time.h>
 #include <string.h>
 #include <sys/socket.h>
-#include <iostream>
+#include <stdio.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <errno.h>
@@ -30,8 +30,6 @@ void printHelp();
 char* getCurrentTime();
 char* getSubstring(const char* string, int s, int l);
 bool checkCommand(char* command);
-
-typedef int SOCKET;
 
 struct sockaddr_in lastClientSockAddr;
 
@@ -227,9 +225,11 @@ void clientProccess(SOCKET sock) {
 
 	while (!exit) {
 		printf(">");
-		char command[COMMAND_LENGTH];
-		std::cin >> command;
-		
+        int size = COMMAND_LENGTH;
+		char* command = (char*)malloc(COMMAND_LENGTH);
+        fgets(command, COMMAND_LENGTH, stdin);
+        command[strlen(command) - 1] = 0;
+
 		if (checkCommand(command)) {
 			char buffer[MESSAGE_MAX_SIZE];
 			bool disconnect = false;
@@ -298,6 +298,7 @@ void clientProccess(SOCKET sock) {
 		else {
 			printf("Wrong command\n");
 		}
+        free(command);
 	}
 }
 
