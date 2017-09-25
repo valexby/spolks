@@ -1,26 +1,18 @@
-//#include <winsock2.h>
-#include <cstdlib>
+#include <winsock2.h>
+#include <stdio.h>
+#include <stdlib.h>
 #include <time.h>
-#include <string.h>
-#include <sys/socket.h>
-#include <iostream>
-#include <netinet/in.h>
-#include <arpa/inet.h>
-#include <errno.h>
-#include <unistd.h>
 
-typedef int SOCKET;
-//#pragma comment(lib, "WS2_32.lib")
+#pragma comment(lib, "WS2_32.lib")
 
-//#pragma warning(disable:4996)
+#pragma warning(disable:4996)
 
 #define PORT 27015
 #define MESSAGE_MAX_SIZE 1024
 #define COMMAND_LENGTH 128
 #define COMMAND_SIZE 4
-#define FILE_PATH "E:\\qwerty.mp4"
-#define INVALID_SOCKET -1
-#define SOCKET_ERROR -1
+#define FILE_PATH_UPLOAD "E:\\qwerty.mp4"
+#define FILE_PATH_DOWNLOAD "E:\\out.mp4"
 
 SOCKET configureServer(SOCKET &serverSock, char* ip);
 SOCKET configureClient(char* ip);
@@ -31,18 +23,19 @@ char* getCurrentTime();
 char* getSubstring(const char* string, int s, int l);
 bool checkCommand(char* command);
 
-typedef int SOCKET;
-
 struct sockaddr_in lastClientSockAddr;
 
 int main(int argc, char* argv[]) {
+	WSADATA wsaData;
+	WSAStartup(MAKEWORD(2, 2), &wsaData);
+
 	SOCKET clientSock;
 
 	if (!strcmp(argv[1], "server")) {
 		SOCKET serverSock;
 		if ((clientSock = configureServer(serverSock, argv[2])) != -1) {
 			serverProccess(serverSock, clientSock);
-			close(serverSock);
+			closesocket(serverSock);
 		}
 	}
 	else if (!strcmp(argv[1], "client")) {
@@ -51,14 +44,16 @@ int main(int argc, char* argv[]) {
 		}
 	}
 
-	close(clientSock);
+	closesocket(clientSock);
+	WSACleanup();
 
 	return 0;
 }
 
 SOCKET configureServer(SOCKET &serverSock, char* ip) {
 	if ((serverSock = socket(AF_INET, SOCK_STREAM, 0)) == INVALID_SOCKET) {
-		printf("socket() error:%ld\n", strerror(errno));
+		printf("socket() error:%ld\n", WSAGetLastError());
+		WSACleanup();
 		return -1;
 	}
 	printf("socket() success\n");
@@ -69,27 +64,30 @@ SOCKET configureServer(SOCKET &serverSock, char* ip) {
 	serverSockAddr.sin_port = htons(PORT);
 
 	if (bind(serverSock, (struct sockaddr*)&serverSockAddr, sizeof(serverSockAddr)) == SOCKET_ERROR) {
-		printf("bind() error:%d\n", strerror(errno));
-		close(serverSock);
+		printf("bind() error:%d\n", WSAGetLastError());
+		closesocket(serverSock);
+		WSACleanup();
 		return -1;
 	}
 	printf("bind() success\n");
 
 	if (listen(serverSock, 1) == SOCKET_ERROR) {
-		printf("listen() error:%d\n", strerror(errno));
-		close(serverSock);
+		printf("listen() error:%d\n", WSAGetLastError());
+		closesocket(serverSock);
+		WSACleanup();
 		return -1;
 	}
 	printf("list() success\n");
 
 	SOCKET connectedSock;
 	struct sockaddr_in connectedSockAddr;
-	socklen_t sockAddrLen = sizeof(struct sockaddr_in);
+	int sockAddrLen = sizeof(struct sockaddr_in);
 
 	printf("Waiting for connection\n");
 	if ((connectedSock = accept(serverSock, (struct sockaddr*)&connectedSockAddr, &sockAddrLen)) == INVALID_SOCKET) {
-		printf("accept() error:%d\n", strerror(errno));
-		close(serverSock);
+		printf("accept() error:%d\n", WSAGetLastError());
+		closesocket(serverSock);
+		WSACleanup();
 		return -1;
 	}
 	printf("Client(%s) connected\n", inet_ntoa(connectedSockAddr.sin_addr));
@@ -101,7 +99,8 @@ SOCKET configureServer(SOCKET &serverSock, char* ip) {
 SOCKET configureClient(char* ip) {
 	SOCKET clientSock;
 	if ((clientSock = socket(AF_INET, SOCK_STREAM, 0)) == INVALID_SOCKET) {
-		printf("socket() error:%ld\n", strerror(errno));
+		printf("socket() error:%ld\n", WSAGetLastError());
+		WSACleanup();
 		return -1;
 	}
 	printf("socket() success\n");
@@ -114,7 +113,8 @@ SOCKET configureClient(char* ip) {
 	printf("Connection to the server\n");
 	if (connect(clientSock, (struct sockaddr*)&clientSockAddr, sizeof(clientSockAddr)) == SOCKET_ERROR) {
 		printf("connect() error\n");
-		close(clientSock);
+		closesocket(clientSock);
+		WSACleanup();
 		return -1;
 	}
 	printf("Connected\n");
@@ -127,96 +127,144 @@ void serverProccess(SOCKET serverSock, SOCKET &clientSock) {
 	bool disconnect = false;
 	bool exit = false;
 	bool canContinue = false;
+	int lastPos = 0;
 
 	while (!exit) {
 		int nowRecv = 0;
 
 		if (disconnect) {
 			struct sockaddr_in connectedSockAddr;
-			socklen_t sockAddrLen = sizeof(struct sockaddr_in);
+			int sockAddrLen = sizeof(struct sockaddr_in);
 
 			printf("Waiting for connection\n");
 			if ((clientSock = accept(serverSock, (struct sockaddr*)&connectedSockAddr, &sockAddrLen)) == INVALID_SOCKET) {
-				printf("accept() error:%d\n", strerror(errno));
-				close(clientSock);
-				close(serverSock);
+				printf("accept() error:%d\n", WSAGetLastError());
+				closesocket(clientSock);
+				closesocket(serverSock);
+				WSACleanup();
 				return;
 			}
 			printf("Client(%s) connected\n", inet_ntoa(connectedSockAddr.sin_addr));
-			disconnect = false;
-			if (!strcmp(inet_ntoa(lastClientSockAddr.sin_addr), inet_ntoa(connectedSockAddr.sin_addr))) {
-				printf("Hello\n");
+			if (!strcmp(inet_ntoa(connectedSockAddr.sin_addr), inet_ntoa(lastClientSockAddr.sin_addr))) {
 				canContinue = true;
 			}
+			disconnect = false;
 			lastClientSockAddr = connectedSockAddr;
 		}
 
-		recv(clientSock, buffer, 4, 0);
-		nowRecv = atoi(buffer);
-		send(clientSock, "ok", 2, 0);
+		if (recv(clientSock, buffer, 4, 0) > 0) {
+			nowRecv = atoi(buffer);
+			send(clientSock, "ok", 2, 0);
 
-		nowRecv = recv(clientSock, buffer, nowRecv, 0);
-		buffer[nowRecv] = '\0';
-
-		if (!strcmp(getSubstring(buffer, 0, 4), "TIME")) {
-			char* time = getCurrentTime();
-			sprintf(buffer, "%d", strlen(time));
-			send(clientSock, buffer, 4, 0);
-
-			nowRecv = recv(clientSock, buffer, 2, 0);
+			nowRecv = recv(clientSock, buffer, nowRecv, 0);
 			buffer[nowRecv] = '\0';
-			if (!strcmp(buffer, "ok")) {
-				send(clientSock, time, strlen(time), 0);
+
+			if (!strcmp(getSubstring(buffer, 0, 4), "TIME")) {
+				char* time = getCurrentTime();
+				sprintf(buffer, "%d", strlen(time));
+				send(clientSock, buffer, 4, 0);
+
+				nowRecv = recv(clientSock, buffer, 2, 0);
+				buffer[nowRecv] = '\0';
+				if (!strcmp(buffer, "ok")) {
+					send(clientSock, time, strlen(time), 0);
+				}
 			}
-		}
-		else if (!strcmp(getSubstring(buffer, 0, 4), "ECHO")) {
-			char* params = (char*)malloc(sizeof(char) * (strlen(buffer) - 5));
-			memcpy(params, getSubstring(buffer, 5, strlen(buffer) - 5), strlen(buffer) - 5);
+			else if (!strcmp(getSubstring(buffer, 0, 4), "ECHO")) {
+				char* params = (char*)malloc(sizeof(char) * (strlen(buffer) - 5));
+				memcpy(params, getSubstring(buffer, 5, strlen(buffer) - 5), strlen(buffer) - 5);
 
-			sprintf(buffer, "%d", strlen(buffer) - 5);
-			send(clientSock, buffer, 4, 0);
+				sprintf(buffer, "%d", strlen(buffer) - 5);
+				send(clientSock, buffer, 4, 0);
 
-			nowRecv = recv(clientSock, buffer, 2, 0);
-			buffer[nowRecv] = '\0';
-			if (!strcmp(buffer, "ok")) {
-				send(clientSock, params, strlen(params) - 5, 0);
+				nowRecv = recv(clientSock, buffer, 2, 0);
+				buffer[nowRecv] = '\0';
+				if (!strcmp(buffer, "ok")) {
+					send(clientSock, params, strlen(params) - 5, 0);
+				}
+				free(params);
 			}
-			free(params);
-		}
-		else if (!strcmp(getSubstring(buffer, 0, 5), "CLOSE")) {
-			printf("Client(%s) disconnected\n", inet_ntoa(lastClientSockAddr.sin_addr));
-			disconnect = true;
-		}
-		else if (!strcmp(buffer, "UPLOAD")) {
-			nowRecv = recv(clientSock, buffer, 1, 0);
-			buffer[nowRecv] = '\0';
-			FILE *file = fopen("E:\\out.mp4", "a+b");
-			if (canContinue) {
+			else if (!strcmp(getSubstring(buffer, 0, 5), "CLOSE")) {
+				printf("Client(%s) disconnected\n", inet_ntoa(lastClientSockAddr.sin_addr));
+				disconnect = true;
+			}
+			else if (!strcmp(buffer, "UPLOAD")) {
+				nowRecv = recv(clientSock, buffer, 1, 0);
+				buffer[nowRecv] = '\0';
+				FILE *file = fopen(FILE_PATH_DOWNLOAD, "a+b");
+				if (canContinue) {
+					fseek(file, 0, SEEK_END);
+				}
+				if (!strcmp(buffer, "!")) {
+					sprintf(buffer, "%d", ftell(file));
+					sprintf(buffer, "%d", strlen(buffer));
+					send(clientSock, buffer, 4, 0);
+					sprintf(buffer, "%d", ftell(file));
+					send(clientSock, buffer, strlen(buffer), 0);
+					do {
+						nowRecv = recv(clientSock, buffer, sizeof(buffer), 0);
+						if (nowRecv <= 0) {
+							printf("Client(%s) disconnected\n", inet_ntoa(lastClientSockAddr.sin_addr));
+							disconnect = true;
+							canContinue = false;
+							break;
+						}
+						if (nowRecv == 3 && !strcmp(getSubstring(buffer, 0, 3), "end")) {
+							break;
+						}
+						fwrite(buffer, 1, nowRecv, file);
+						send(clientSock, "ok", 2, 0);
+					} while (1);
+					fclose(file);
+				}
+			}
+			else if (!strcmp(buffer, "DOWNLOAD")) {
+				FILE *file = fopen(FILE_PATH_UPLOAD, "r+b");
 				fseek(file, 0, SEEK_END);
-			}
-			if (!strcmp(buffer, "!")) {
 				sprintf(buffer, "%d", ftell(file));
 				sprintf(buffer, "%d", strlen(buffer));
 				send(clientSock, buffer, 4, 0);
 				sprintf(buffer, "%d", ftell(file));
 				send(clientSock, buffer, strlen(buffer), 0);
-
-				do {
-					nowRecv = recv(clientSock, buffer, sizeof(buffer), 0);
+				if (canContinue) {
+					canContinue = false;
+				}
+				else {
+					lastPos = 0;
+				}
+				fseek(file, lastPos, SEEK_SET);
+				sprintf(buffer, "%d", ftell(file));
+				sprintf(buffer, "%d", strlen(buffer));
+				send(clientSock, buffer, 4, 0);
+				sprintf(buffer, "%d", ftell(file));
+				send(clientSock, buffer, strlen(buffer), 0);
+				int nowReaded = 0;
+				while ((nowReaded = fread(buffer, 1, sizeof(buffer), file)) != 0) {
+					send(clientSock, buffer, nowReaded, 0);
+					nowRecv = recv(clientSock, buffer, 2, 0);
 					if (nowRecv <= 0) {
 						printf("Client(%s) disconnected\n", inet_ntoa(lastClientSockAddr.sin_addr));
 						disconnect = true;
 						canContinue = false;
 						break;
+
 					}
 					if (nowRecv == 3 && !strcmp(getSubstring(buffer, 0, 3), "end")) {
 						break;
 					}
-					fwrite(buffer, 1, nowRecv, file);
-					send(clientSock, "ok", 2, 0);
-				} while (1);
+					buffer[nowRecv] = '\0';
+					if (strcmp(buffer, "ok")) {
+						break;
+					}
+					lastPos = ftell(file);
+				}
+				send(clientSock, "end", 3, 0);
 				fclose(file);
 			}
+		}
+		else {
+			printf("Client(%s) disconnected\n", inet_ntoa(lastClientSockAddr.sin_addr));
+			disconnect = true;
 		}
 	}
 }
@@ -228,8 +276,8 @@ void clientProccess(SOCKET sock) {
 	while (!exit) {
 		printf(">");
 		char command[COMMAND_LENGTH];
-		std::cin >> command;
-		
+		gets_s(command, COMMAND_LENGTH);
+
 		if (checkCommand(command)) {
 			char buffer[MESSAGE_MAX_SIZE];
 			bool disconnect = false;
@@ -269,7 +317,7 @@ void clientProccess(SOCKET sock) {
 					exit = true;
 				}
 				else if (!strcmp(command, "UPLOAD")) {
-					FILE *file = fopen(FILE_PATH, "r+b");
+					FILE *file = fopen(FILE_PATH_UPLOAD, "r+b");
 					send(sock, "!", 1, 0);
 					recv(sock, buffer, 4, 0);
 					nowRecv = atoi(buffer);
@@ -291,6 +339,32 @@ void clientProccess(SOCKET sock) {
 					}
 					printf("\n");
 					send(sock, "end", 3, 0);
+					fclose(file);
+				}
+				else if (!strcmp(command, "DOWNLOAD")) {
+					FILE *file = fopen(FILE_PATH_DOWNLOAD, "a+b");
+					recv(sock, buffer, 4, 0);
+					nowRecv = atoi(buffer);
+					recv(sock, buffer, nowRecv, 0);
+					int size = atoi(buffer);
+
+					recv(sock, buffer, 4, 0);
+					nowRecv = atoi(buffer);
+					recv(sock, buffer, nowRecv, 0);
+					fseek(file, 0, SEEK_END);
+					fseek(file, atoi(buffer), SEEK_SET);
+					int readed = atoi(buffer);
+					do {
+						nowRecv = recv(sock, buffer, sizeof(buffer), 0);
+						if (nowRecv == 3 && !strcmp(getSubstring(buffer, 0, 3), "end")) {
+							break;
+						}
+						readed += nowRecv;
+						fwrite(buffer, 1, nowRecv, file);
+						send(sock, "ok", 2, 0);
+						printf("[%1.00f/100]\r", (float)(((float)readed / (float)size) * 100));
+					} while (1);
+					printf("\n");
 					fclose(file);
 				}
 			}
@@ -321,7 +395,7 @@ char* getCurrentTime() {
 }
 
 char* getSubstring(const char* string, int s, int l) {
-	char* substring = (char*)malloc(128);
+	char substring[128];
 	int c = 0;
 
 	while (c < l) {
