@@ -1,18 +1,37 @@
-#include <winsock2.h>
-#include <stdio.h>
 #include <stdlib.h>
 #include <time.h>
+#include <string.h>
+#include <stdio.h>
 
+#ifdef _WIN32
+
+#include <winsock2.h>
 #pragma comment(lib, "WS2_32.lib")
-
 #pragma warning(disable:4996)
+#define FILE_PATH_UPLOAD "E:\\qwerty.mp4"
+#define FILE_PATH_DOWNLOAD "E:\\out.mp4"
+
+#endif
+
+#ifdef __linux
+
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <errno.h>
+#include <unistd.h>
+#define FILE_PATH_UPLOAD "/home/valex/workspace/spolks/in/file.webm"
+#define FILE_PATH_DOWNLOAD "E:\\out.mp4"
+#define INVALID_SOCKET -1
+#define SOCKET_ERROR -1
+typedef int SOCKET;
+
+#endif
 
 #define PORT 27015
 #define MESSAGE_MAX_SIZE 1024
 #define COMMAND_LENGTH 128
 #define COMMAND_SIZE 4
-#define FILE_PATH_UPLOAD "E:\\qwerty.mp4"
-#define FILE_PATH_DOWNLOAD "E:\\out.mp4"
 
 SOCKET configureServer(SOCKET &serverSock, char* ip);
 SOCKET configureClient(char* ip);
@@ -22,38 +41,38 @@ void printHelp();
 char* getCurrentTime();
 char* getSubstring(const char* string, int s, int l);
 bool checkCommand(char* command);
+void CloseSocket(SOCKET);
 
 struct sockaddr_in lastClientSockAddr;
 
 int main(int argc, char* argv[]) {
+    #ifdef _WIN32
 	WSADATA wsaData;
 	WSAStartup(MAKEWORD(2, 2), &wsaData);
-
+    #endif
 	SOCKET clientSock;
 
 	if (!strcmp(argv[1], "server")) {
 		SOCKET serverSock;
 		if ((clientSock = configureServer(serverSock, argv[2])) != -1) {
 			serverProccess(serverSock, clientSock);
-			closesocket(serverSock);
+			CloseSocket(serverSock);
 		}
 	}
 	else if (!strcmp(argv[1], "client")) {
 		if ((clientSock = configureClient(argv[2])) != -1) {
 			clientProccess(clientSock);
 		}
+        CloseSocket(clientSock);
 	}
-
-	closesocket(clientSock);
-	WSACleanup();
-
+    
 	return 0;
 }
 
 SOCKET configureServer(SOCKET &serverSock, char* ip) {
 	if ((serverSock = socket(AF_INET, SOCK_STREAM, 0)) == INVALID_SOCKET) {
-		printf("socket() error:%ld\n", WSAGetLastError());
-		WSACleanup();
+        PrintError("socket() error:");
+        CloseSocket(serverSock);
 		return -1;
 	}
 	printf("socket() success\n");
@@ -64,17 +83,15 @@ SOCKET configureServer(SOCKET &serverSock, char* ip) {
 	serverSockAddr.sin_port = htons(PORT);
 
 	if (bind(serverSock, (struct sockaddr*)&serverSockAddr, sizeof(serverSockAddr)) == SOCKET_ERROR) {
-		printf("bind() error:%d\n", WSAGetLastError());
-		closesocket(serverSock);
-		WSACleanup();
+        PrintError("bind() error:");
+        CloseSocket(serverSock);
 		return -1;
 	}
 	printf("bind() success\n");
 
 	if (listen(serverSock, 1) == SOCKET_ERROR) {
-		printf("listen() error:%d\n", WSAGetLastError());
-		closesocket(serverSock);
-		WSACleanup();
+        PrintError("listen() error:");
+        CloseSocket(serverSock);
 		return -1;
 	}
 	printf("list() success\n");
@@ -85,9 +102,8 @@ SOCKET configureServer(SOCKET &serverSock, char* ip) {
 
 	printf("Waiting for connection\n");
 	if ((connectedSock = accept(serverSock, (struct sockaddr*)&connectedSockAddr, &sockAddrLen)) == INVALID_SOCKET) {
-		printf("accept() error:%d\n", WSAGetLastError());
-		closesocket(serverSock);
-		WSACleanup();
+        PrintError("accept() error:");
+        CloseSocket(serverSock);
 		return -1;
 	}
 	printf("Client(%s) connected\n", inet_ntoa(connectedSockAddr.sin_addr));
@@ -99,8 +115,8 @@ SOCKET configureServer(SOCKET &serverSock, char* ip) {
 SOCKET configureClient(char* ip) {
 	SOCKET clientSock;
 	if ((clientSock = socket(AF_INET, SOCK_STREAM, 0)) == INVALID_SOCKET) {
-		printf("socket() error:%ld\n", WSAGetLastError());
-		WSACleanup();
+        PrintError("socket() error:");
+        CloseSocket(serverSock);
 		return -1;
 	}
 	printf("socket() success\n");
@@ -112,9 +128,8 @@ SOCKET configureClient(char* ip) {
 
 	printf("Connection to the server\n");
 	if (connect(clientSock, (struct sockaddr*)&clientSockAddr, sizeof(clientSockAddr)) == SOCKET_ERROR) {
-		printf("connect() error\n");
-		closesocket(clientSock);
-		WSACleanup();
+        PrintError("connect() error:");
+        CloseSocket(serverSock);
 		return -1;
 	}
 	printf("Connected\n");
@@ -138,10 +153,9 @@ void serverProccess(SOCKET serverSock, SOCKET &clientSock) {
 
 			printf("Waiting for connection\n");
 			if ((clientSock = accept(serverSock, (struct sockaddr*)&connectedSockAddr, &sockAddrLen)) == INVALID_SOCKET) {
-				printf("accept() error:%d\n", WSAGetLastError());
-				closesocket(clientSock);
-				closesocket(serverSock);
-				WSACleanup();
+PrintError("accept() error:");
+CloseSocket(clientSock);
+CloseSocket(serverSock);
 				return;
 			}
 			printf("Client(%s) connected\n", inet_ntoa(connectedSockAddr.sin_addr));
@@ -217,7 +231,7 @@ void serverProccess(SOCKET serverSock, SOCKET &clientSock) {
 					} while (1);
 					fclose(file);
 				}
-			}
+            }
 			else if (!strcmp(buffer, "DOWNLOAD")) {
 				FILE *file = fopen(FILE_PATH_UPLOAD, "r+b");
 				fseek(file, 0, SEEK_END);
@@ -275,8 +289,9 @@ void clientProccess(SOCKET sock) {
 
 	while (!exit) {
 		printf(">");
-		char command[COMMAND_LENGTH];
-		gets_s(command, COMMAND_LENGTH);
+		char* command = (char*)malloc(COMMAND_LENGTH);
+        fgets(command, COMMAND_LENGTH, stdin);
+        command[strlen(command) - 1] = 0;
 
 		if (checkCommand(command)) {
 			char buffer[MESSAGE_MAX_SIZE];
@@ -372,6 +387,7 @@ void clientProccess(SOCKET sock) {
 		else {
 			printf("Wrong command\n");
 		}
+        free(command);
 	}
 }
 
@@ -410,4 +426,28 @@ char* getSubstring(const char* string, int s, int l) {
 bool checkCommand(char* command) {
 	return (!strcmp(command, "CLOSE") || !strcmp(command, "TIME") || !strcmp(getSubstring(command, 0, 4), "ECHO")
 		|| !strcmp(command, "UPLOAD") || !strcmp(command, "DOWNLOAD"));
+}
+
+
+void CloseSocket(SOCKET socket) {
+    #ifdef _WIN32
+    closesocket(socket);
+	WSACleanup();
+    #endif
+
+    #ifdef __linux
+    close(socket);
+    #endif
+}
+
+
+void PrintError(const char[] error_message) {
+    printf(error_message);
+    #ifdef _WIN32
+    printf("%ld\n", WSAGetLastError())
+    #endif
+
+    #ifdef __linux
+    printf("%s\n", strerror(errno));
+    #endif
 }
