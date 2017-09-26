@@ -10,6 +10,7 @@
 #pragma warning(disable:4996)
 #define FILE_PATH_UPLOAD "E:\\qwerty.mp4"
 #define FILE_PATH_DOWNLOAD "E:\\out.mp4"
+typedef int socklen_t;
 
 #endif
 
@@ -20,8 +21,8 @@
 #include <arpa/inet.h>
 #include <errno.h>
 #include <unistd.h>
-#define FILE_PATH_UPLOAD "/home/valex/workspace/spolks/in/file.webm"
-#define FILE_PATH_DOWNLOAD "E:\\out.mp4"
+#define FILE_PATH_UPLOAD "/home/valex/workspace/spolks/in/file.mp4"
+#define FILE_PATH_DOWNLOAD "/home/valex/workspace/spolks/out/file.mp4"
 #define INVALID_SOCKET -1
 #define SOCKET_ERROR -1
 typedef int SOCKET;
@@ -39,9 +40,9 @@ void serverProccess(SOCKET serverSock, SOCKET &clientSock);
 void clientProccess(SOCKET sock);
 void printHelp();
 char* getCurrentTime();
-char* getSubstring(const char* string, int s, int l);
 bool checkCommand(char* command);
 void CloseSocket(SOCKET);
+void PrintError(const char[]);
 
 struct sockaddr_in lastClientSockAddr;
 
@@ -98,7 +99,7 @@ SOCKET configureServer(SOCKET &serverSock, char* ip) {
 
 	SOCKET connectedSock;
 	struct sockaddr_in connectedSockAddr;
-	int sockAddrLen = sizeof(struct sockaddr_in);
+	socklen_t sockAddrLen = sizeof(struct sockaddr_in);
 
 	printf("Waiting for connection\n");
 	if ((connectedSock = accept(serverSock, (struct sockaddr*)&connectedSockAddr, &sockAddrLen)) == INVALID_SOCKET) {
@@ -116,7 +117,7 @@ SOCKET configureClient(char* ip) {
 	SOCKET clientSock;
 	if ((clientSock = socket(AF_INET, SOCK_STREAM, 0)) == INVALID_SOCKET) {
         PrintError("socket() error:");
-        CloseSocket(serverSock);
+        CloseSocket(clientSock);
 		return -1;
 	}
 	printf("socket() success\n");
@@ -129,7 +130,7 @@ SOCKET configureClient(char* ip) {
 	printf("Connection to the server\n");
 	if (connect(clientSock, (struct sockaddr*)&clientSockAddr, sizeof(clientSockAddr)) == SOCKET_ERROR) {
         PrintError("connect() error:");
-        CloseSocket(serverSock);
+        CloseSocket(clientSock);
 		return -1;
 	}
 	printf("Connected\n");
@@ -149,7 +150,7 @@ void serverProccess(SOCKET serverSock, SOCKET &clientSock) {
 
 		if (disconnect) {
 			struct sockaddr_in connectedSockAddr;
-			int sockAddrLen = sizeof(struct sockaddr_in);
+			socklen_t sockAddrLen = sizeof(struct sockaddr_in);
 
 			printf("Waiting for connection\n");
 			if ((clientSock = accept(serverSock, (struct sockaddr*)&connectedSockAddr, &sockAddrLen)) == INVALID_SOCKET) {
@@ -173,7 +174,7 @@ CloseSocket(serverSock);
 			nowRecv = recv(clientSock, buffer, nowRecv, 0);
 			buffer[nowRecv] = '\0';
 
-			if (!strcmp(getSubstring(buffer, 0, 4), "TIME")) {
+			if (!strncmp(buffer, "TIME", 4)) {
 				char* time = getCurrentTime();
 				sprintf(buffer, "%d", strlen(time));
 				send(clientSock, buffer, 4, 0);
@@ -184,9 +185,9 @@ CloseSocket(serverSock);
 					send(clientSock, time, strlen(time), 0);
 				}
 			}
-			else if (!strcmp(getSubstring(buffer, 0, 4), "ECHO")) {
+            else if (!strncmp(buffer, "ECHO", 4)) {
 				char* params = (char*)malloc(sizeof(char) * (strlen(buffer) - 5));
-				memcpy(params, getSubstring(buffer, 5, strlen(buffer) - 5), strlen(buffer) - 5);
+                memcpy(params, buffer + 5, strlen(buffer) - 5);
 
 				sprintf(buffer, "%d", strlen(buffer) - 5);
 				send(clientSock, buffer, 4, 0);
@@ -198,7 +199,7 @@ CloseSocket(serverSock);
 				}
 				free(params);
 			}
-			else if (!strcmp(getSubstring(buffer, 0, 5), "CLOSE")) {
+			else if (!strncmp(buffer, "CLOSE", 5)) {
 				printf("Client(%s) disconnected\n", inet_ntoa(lastClientSockAddr.sin_addr));
 				disconnect = true;
 			}
@@ -223,7 +224,7 @@ CloseSocket(serverSock);
 							canContinue = false;
 							break;
 						}
-						if (nowRecv == 3 && !strcmp(getSubstring(buffer, 0, 3), "end")) {
+						if (nowRecv == 3 && !strncmp(buffer, "end", 3)) {
 							break;
 						}
 						fwrite(buffer, 1, nowRecv, file);
@@ -232,7 +233,8 @@ CloseSocket(serverSock);
 					fclose(file);
 				}
             }
-			else if (!strcmp(buffer, "DOWNLOAD")) {
+
+            else if (!strcmp(buffer, "DOWNLOAD")) {
 				FILE *file = fopen(FILE_PATH_UPLOAD, "r+b");
 				fseek(file, 0, SEEK_END);
 				sprintf(buffer, "%d", ftell(file));
@@ -263,7 +265,7 @@ CloseSocket(serverSock);
 						break;
 
 					}
-					if (nowRecv == 3 && !strcmp(getSubstring(buffer, 0, 3), "end")) {
+					if (nowRecv == 3 && !strncmp(buffer, "end", 3)) {
 						break;
 					}
 					buffer[nowRecv] = '\0';
@@ -282,6 +284,7 @@ CloseSocket(serverSock);
 		}
 	}
 }
+
 
 void clientProccess(SOCKET sock) {
 	bool exit = false;
@@ -317,7 +320,7 @@ void clientProccess(SOCKET sock) {
 					buffer[nowRecv] = '\0';
 					printf("Server time:%s", buffer);
 				}
-				else if (!strcmp(getSubstring(command, 0, 4), "ECHO")) {
+				else if (!strncmp(command, "ECHO", 4)) {
 					recv(sock, buffer, 4, 0);
 					nowRecv = atoi(buffer);
 					send(sock, "ok", 2, 0);
@@ -371,7 +374,7 @@ void clientProccess(SOCKET sock) {
 					int readed = atoi(buffer);
 					do {
 						nowRecv = recv(sock, buffer, sizeof(buffer), 0);
-						if (nowRecv == 3 && !strcmp(getSubstring(buffer, 0, 3), "end")) {
+						if (nowRecv == 3 && !strncmp(buffer, "end", 3)) {
 							break;
 						}
 						readed += nowRecv;
@@ -410,21 +413,8 @@ char* getCurrentTime() {
 	return asctime(timeinfo);
 }
 
-char* getSubstring(const char* string, int s, int l) {
-	char substring[128];
-	int c = 0;
-
-	while (c < l) {
-		substring[c] = string[s + c];
-		c++;
-	}
-	substring[c] = '\0';
-
-	return substring;
-}
-
 bool checkCommand(char* command) {
-	return (!strcmp(command, "CLOSE") || !strcmp(command, "TIME") || !strcmp(getSubstring(command, 0, 4), "ECHO")
+	return (!strcmp(command, "CLOSE") || !strcmp(command, "TIME") || !strncmp(command, "ECHO", 4)
 		|| !strcmp(command, "UPLOAD") || !strcmp(command, "DOWNLOAD"));
 }
 
@@ -441,10 +431,10 @@ void CloseSocket(SOCKET socket) {
 }
 
 
-void PrintError(const char[] error_message) {
+void PrintError(const char error_message[]) {
     printf(error_message);
     #ifdef _WIN32
-    printf("%ld\n", WSAGetLastError())
+    printf("%ld\n", WSAGetLastError());
     #endif
 
     #ifdef __linux
