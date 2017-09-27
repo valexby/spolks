@@ -6,10 +6,11 @@
 #ifdef _WIN32
 
 #include <winsock2.h>
+#include <MSTcpIP.h>
 #pragma comment(lib, "WS2_32.lib")
 #pragma warning(disable:4996)
-#define FILE_PATH_UPLOAD "E:\\qwerty.mp4"
-#define FILE_PATH_DOWNLOAD "E:\\out.mp4"
+#define FILE_PATH_UPLOAD "C:\\qwerty.mp4"
+#define FILE_PATH_DOWNLOAD "C:\\out.mp4"
 typedef int socklen_t;
 
 #endif
@@ -33,6 +34,7 @@ typedef int SOCKET;
 #define MESSAGE_MAX_SIZE 1024
 #define COMMAND_LENGTH 128
 #define COMMAND_SIZE 4
+#define validate(value, falied, socket) __validate(value, falied, socket, __FUNCTION__)
 
 SOCKET configureServer(SOCKET &serverSock, char* ip);
 SOCKET configureClient(char* ip);
@@ -43,14 +45,17 @@ char* getCurrentTime();
 bool checkCommand(char* command);
 void CloseSocket(SOCKET);
 void PrintError(const char[]);
+SOCKET SetupKeepalive(SOCKET);
+SOCKET CreateSocket(void);
+bool __validate(int value, int failed, SOCKET socket, const char *func_name);
 
 struct sockaddr_in lastClientSockAddr;
 
 int main(int argc, char* argv[]) {
-    #ifdef _WIN32
+#ifdef _WIN32
 	WSADATA wsaData;
 	WSAStartup(MAKEWORD(2, 2), &wsaData);
-    #endif
+#endif
 	SOCKET clientSock;
 
 	if (!strcmp(argv[1], "server")) {
@@ -64,38 +69,29 @@ int main(int argc, char* argv[]) {
 		if ((clientSock = configureClient(argv[2])) != -1) {
 			clientProccess(clientSock);
 		}
-        CloseSocket(clientSock);
+		CloseSocket(clientSock);
 	}
-    
+
 	return 0;
-}
+}	
 
 SOCKET configureServer(SOCKET &serverSock, char* ip) {
-	if ((serverSock = socket(AF_INET, SOCK_STREAM, 0)) == INVALID_SOCKET) {
-        PrintError("socket() error:");
-        CloseSocket(serverSock);
-		return -1;
-	}
-	printf("socket() success\n");
+	serverSock = CreateSocket();
 
 	struct sockaddr_in serverSockAddr;
 	serverSockAddr.sin_family = AF_INET;
 	serverSockAddr.sin_addr.s_addr = inet_addr(ip);
 	serverSockAddr.sin_port = htons(PORT);
 
-	if (bind(serverSock, (struct sockaddr*)&serverSockAddr, sizeof(serverSockAddr)) == SOCKET_ERROR) {
-        PrintError("bind() error:");
-        CloseSocket(serverSock);
+    int ret;
+    ret = bind(serverSock, (struct sockaddr*)&serverSockAddr, sizeof(serverSockAddr));
+	if (!validate(ret, SOCKET_ERROR, serverSock)) {
 		return -1;
 	}
-	printf("bind() success\n");
 
-	if (listen(serverSock, 1) == SOCKET_ERROR) {
-        PrintError("listen() error:");
-        CloseSocket(serverSock);
+	if (!validate(listen(serverSock, 1), SOCKET_ERROR, serverSock)) {
 		return -1;
 	}
-	printf("list() success\n");
 
 	SOCKET connectedSock;
 	struct sockaddr_in connectedSockAddr;
@@ -103,24 +99,23 @@ SOCKET configureServer(SOCKET &serverSock, char* ip) {
 
 	printf("Waiting for connection\n");
 	if ((connectedSock = accept(serverSock, (struct sockaddr*)&connectedSockAddr, &sockAddrLen)) == INVALID_SOCKET) {
-        PrintError("accept() error:");
-        CloseSocket(serverSock);
+		PrintError("accept() error:");
+		CloseSocket(serverSock);
 		return -1;
 	}
 	printf("Client(%s) connected\n", inet_ntoa(connectedSockAddr.sin_addr));
 	lastClientSockAddr = connectedSockAddr;
 
-	return connectedSock;
+    if ((connectedSock = SetupKeepalive(connectedSock)) == -1) {
+        PrintError("keepalive error:");
+        CloseSocket(connectedSock);
+        return -1;
+    }
+    return connectedSock;
 }
-
+	
 SOCKET configureClient(char* ip) {
-	SOCKET clientSock;
-	if ((clientSock = socket(AF_INET, SOCK_STREAM, 0)) == INVALID_SOCKET) {
-        PrintError("socket() error:");
-        CloseSocket(clientSock);
-		return -1;
-	}
-	printf("socket() success\n");
+    SOCKET clientSock = CreateSocket();
 
 	struct sockaddr_in clientSockAddr;
 	clientSockAddr.sin_family = AF_INET;
@@ -129,15 +124,21 @@ SOCKET configureClient(char* ip) {
 
 	printf("Connection to the server\n");
 	if (connect(clientSock, (struct sockaddr*)&clientSockAddr, sizeof(clientSockAddr)) == SOCKET_ERROR) {
-        PrintError("connect() error:");
-        CloseSocket(clientSock);
+		PrintError("connect() error:");
+		CloseSocket(clientSock);
 		return -1;
 	}
 	printf("Connected\n");
 
+    if ((clientSock = SetupKeepalive(clientSock)) == -1) {
+        PrintError("keepalive error:");
+        CloseSocket(clientSock);
+        return -1;
+    }
+
 	return clientSock;
 }
-
+	
 void serverProccess(SOCKET serverSock, SOCKET &clientSock) {
 	char buffer[MESSAGE_MAX_SIZE];
 	bool disconnect = false;
@@ -154,9 +155,9 @@ void serverProccess(SOCKET serverSock, SOCKET &clientSock) {
 
 			printf("Waiting for connection\n");
 			if ((clientSock = accept(serverSock, (struct sockaddr*)&connectedSockAddr, &sockAddrLen)) == INVALID_SOCKET) {
-PrintError("accept() error:");
-CloseSocket(clientSock);
-CloseSocket(serverSock);
+				PrintError("accept() error:");
+				CloseSocket(clientSock);
+				CloseSocket(serverSock);
 				return;
 			}
 			printf("Client(%s) connected\n", inet_ntoa(connectedSockAddr.sin_addr));
@@ -175,6 +176,7 @@ CloseSocket(serverSock);
 			buffer[nowRecv] = '\0';
 
 			if (!strncmp(buffer, "TIME", 4)) {
+				printf("TIME command\n");
 				char* time = getCurrentTime();
 				sprintf(buffer, "%d", strlen(time));
 				send(clientSock, buffer, 4, 0);
@@ -185,9 +187,11 @@ CloseSocket(serverSock);
 					send(clientSock, time, strlen(time), 0);
 				}
 			}
-            else if (!strncmp(buffer, "ECHO", 4)) {
-				char* params = (char*)malloc(sizeof(char) * (strlen(buffer) - 5));
-                memcpy(params, buffer + 5, strlen(buffer) - 5);
+			else if (!strncmp(buffer, "ECHO", 4)) {
+				printf("%s command\n", buffer);
+				char* params = (char*)malloc(sizeof(char) * (strlen(buffer) - 4));
+				memcpy(params, buffer + 5, strlen(buffer) - 5);
+				params[strlen(buffer) - 5] = '\0';
 
 				sprintf(buffer, "%d", strlen(buffer) - 5);
 				send(clientSock, buffer, 4, 0);
@@ -195,15 +199,17 @@ CloseSocket(serverSock);
 				nowRecv = recv(clientSock, buffer, 2, 0);
 				buffer[nowRecv] = '\0';
 				if (!strcmp(buffer, "ok")) {
-					send(clientSock, params, strlen(params) - 5, 0);
+					send(clientSock, params, strlen(params), 0);
 				}
 				free(params);
 			}
 			else if (!strncmp(buffer, "CLOSE", 5)) {
+				printf("CLOSE command\n");
 				printf("Client(%s) disconnected\n", inet_ntoa(lastClientSockAddr.sin_addr));
 				disconnect = true;
 			}
 			else if (!strcmp(buffer, "UPLOAD")) {
+				printf("UPLOAD command\n");
 				nowRecv = recv(clientSock, buffer, 1, 0);
 				buffer[nowRecv] = '\0';
 				FILE *file = fopen(FILE_PATH_DOWNLOAD, "a+b");
@@ -224,7 +230,7 @@ CloseSocket(serverSock);
 							canContinue = false;
 							break;
 						}
-						if (nowRecv == 3 && !strncmp(buffer, "end", 3)) {
+						if (!strncmp(buffer, "end", 3)) {
 							break;
 						}
 						fwrite(buffer, 1, nowRecv, file);
@@ -232,9 +238,10 @@ CloseSocket(serverSock);
 					} while (1);
 					fclose(file);
 				}
-            }
+			}
 
-            else if (!strcmp(buffer, "DOWNLOAD")) {
+			else if (!strcmp(buffer, "DOWNLOAD")) {
+				printf("DOWNLOAD command\n");
 				FILE *file = fopen(FILE_PATH_UPLOAD, "r+b");
 				fseek(file, 0, SEEK_END);
 				sprintf(buffer, "%d", ftell(file));
@@ -265,7 +272,7 @@ CloseSocket(serverSock);
 						break;
 
 					}
-					if (nowRecv == 3 && !strncmp(buffer, "end", 3)) {
+					if (!strncmp(buffer, "end", 3)) {
 						break;
 					}
 					buffer[nowRecv] = '\0';
@@ -274,7 +281,8 @@ CloseSocket(serverSock);
 					}
 					lastPos = ftell(file);
 				}
-				send(clientSock, "end", 3, 0);
+				if(!disconnect)
+					send(clientSock, "end", 3, 0);
 				fclose(file);
 			}
 		}
@@ -285,7 +293,6 @@ CloseSocket(serverSock);
 	}
 }
 
-
 void clientProccess(SOCKET sock) {
 	bool exit = false;
 	printHelp();
@@ -293,8 +300,8 @@ void clientProccess(SOCKET sock) {
 	while (!exit) {
 		printf(">");
 		char* command = (char*)malloc(COMMAND_LENGTH);
-        fgets(command, COMMAND_LENGTH, stdin);
-        command[strlen(command) - 1] = 0;
+		fgets(command, COMMAND_LENGTH, stdin);
+		command[strlen(command) - 1] = 0;
 
 		if (checkCommand(command)) {
 			char buffer[MESSAGE_MAX_SIZE];
@@ -374,7 +381,7 @@ void clientProccess(SOCKET sock) {
 					int readed = atoi(buffer);
 					do {
 						nowRecv = recv(sock, buffer, sizeof(buffer), 0);
-						if (nowRecv == 3 && !strncmp(buffer, "end", 3)) {
+						if (!strncmp(buffer, "end", 3)) {
 							break;
 						}
 						readed += nowRecv;
@@ -390,7 +397,7 @@ void clientProccess(SOCKET sock) {
 		else {
 			printf("Wrong command\n");
 		}
-        free(command);
+		free(command);
 	}
 }
 
@@ -418,26 +425,70 @@ bool checkCommand(char* command) {
 		|| !strcmp(command, "UPLOAD") || !strcmp(command, "DOWNLOAD"));
 }
 
+SOCKET SetupKeepalive(SOCKET socket) {
+#ifdef _WIN32
+	DWORD dwBytesRet=0;
+	struct tcp_keepalive keepalive;
+	keepalive.onoff = TRUE;
+	keepalive.keepalivetime = 7200000;
+	keepalive.keepaliveinterval = 1000;
 
-void CloseSocket(SOCKET socket) {
-    #ifdef _WIN32
-    closesocket(socket);
-	WSACleanup();
-    #endif
+	if(WSAIoctl(socket, SIO_KEEPALIVE_VALS, &keepalive, sizeof(keepalive), NULL, 0, &dwBytesRet, NULL, NULL) == SOCKET_ERROR) {
+		return -1;
+	}
+#endif
 
-    #ifdef __linux
-    close(socket);
-    #endif
+#ifdef __linux
+	int optval = 1;
+	socklen_t  optlen = sizeof(optval);
+
+	if(setsockopt(socket, SOL_SOCKET, SO_KEEPALIVE, &optval, optlen) == SOCKET_ERROR) {
+		return -1;
+	}
+#endif
+
+	return socket;
 }
 
+SOCKET CreateSocket(void) {
+    SOCKET nooby;
+    if (!validate((nooby = socket(AF_INET, SOCK_STREAM, 0)), INVALID_SOCKET, nooby)) {
+        return -1;
+    }
+    return nooby;
+}
+
+void CloseSocket(SOCKET nooby) {
+#ifdef _WIN32
+	closesocket(nooby);
+	WSACleanup();
+#endif
+
+#ifdef __linux
+	close(nooby);
+#endif
+}
 
 void PrintError(const char error_message[]) {
-    printf(error_message);
-    #ifdef _WIN32
-    printf("%ld\n", WSAGetLastError());
-    #endif
+	printf("%s", error_message);
+#ifdef _WIN32
+	printf("%ld\n", WSAGetLastError());
+#endif
 
-    #ifdef __linux
-    printf("%s\n", strerror(errno));
-    #endif
+#ifdef __linux
+		printf("%s\n", strerror(errno));
+#endif
+}
+
+bool __validate(int value, int failed, SOCKET nooby, const char func_name[]) {
+    char* msg = (char*)malloc(strlen(func_name) + 8);
+    memcpy(msg, func_name, strlen(func_name));
+    if (value == failed) {
+        msg[strlen(func_name) + 8] = 0;
+        PrintError(strcat(msg, " error:"));
+        CloseSocket(nooby);
+        return false;
+    }
+    printf("%s success\n", msg);
+    return true;
 }
