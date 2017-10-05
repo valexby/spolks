@@ -34,6 +34,7 @@ typedef int SOCKET;
 #define MESSAGE_MAX_SIZE 1024
 #define COMMAND_LENGTH 128
 #define COMMAND_SIZE 4
+#define validate(value, falied, socket) __validate(value, falied, socket, __FUNCTION__)
 
 SOCKET configureServer(SOCKET &serverSock, char* ip);
 SOCKET configureClient(char* ip);
@@ -44,6 +45,9 @@ char* getCurrentTime();
 bool checkCommand(char* command);
 void CloseSocket(SOCKET);
 void PrintError(const char[]);
+SOCKET SetupKeepalive(SOCKET);
+SOCKET CreateSocket(void);
+bool __validate(int value, int failed, SOCKET socket, const char *func_name);
 
 struct sockaddr_in lastClientSockAddr;
 
@@ -72,31 +76,22 @@ int main(int argc, char* argv[]) {
 }	
 
 SOCKET configureServer(SOCKET &serverSock, char* ip) {
-	if ((serverSock = socket(AF_INET, SOCK_STREAM, 0)) == INVALID_SOCKET) {
-		PrintError("socket() error:");
-		CloseSocket(serverSock);
-		return -1;
-	}
-	printf("socket() success\n");
+	serverSock = CreateSocket();
 
 	struct sockaddr_in serverSockAddr;
 	serverSockAddr.sin_family = AF_INET;
 	serverSockAddr.sin_addr.s_addr = inet_addr(ip);
 	serverSockAddr.sin_port = htons(PORT);
 
-	if (bind(serverSock, (struct sockaddr*)&serverSockAddr, sizeof(serverSockAddr)) == SOCKET_ERROR) {
-		PrintError("bind() error:");
-		CloseSocket(serverSock);
+    int ret;
+    ret = bind(serverSock, (struct sockaddr*)&serverSockAddr, sizeof(serverSockAddr));
+	if (!validate(ret, SOCKET_ERROR, serverSock)) {
 		return -1;
 	}
-	printf("bind() success\n");
 
-	if (listen(serverSock, 1) == SOCKET_ERROR) {
-		PrintError("listen() error:");
-		CloseSocket(serverSock);
+	if (!validate(listen(serverSock, 1), SOCKET_ERROR, serverSock)) {
 		return -1;
 	}
-	printf("list() success\n");
 
 	SOCKET connectedSock;
 	struct sockaddr_in connectedSockAddr;
@@ -111,42 +106,16 @@ SOCKET configureServer(SOCKET &serverSock, char* ip) {
 	printf("Client(%s) connected\n", inet_ntoa(connectedSockAddr.sin_addr));
 	lastClientSockAddr = connectedSockAddr;
 
-#ifdef _WIN32
-	DWORD dwBytesRet=0;  
-	struct tcp_keepalive keepalive;
-	keepalive.onoff = TRUE;
-	keepalive.keepalivetime = 7200000;
-	keepalive.keepaliveinterval = 1000;
-
-	if(WSAIoctl(connectedSock, SIO_KEEPALIVE_VALS, &keepalive, sizeof(keepalive), NULL, 0, &dwBytesRet, NULL, NULL) == SOCKET_ERROR) {
-		PrintError("keepalive error:");
-		CloseSocket(connectedSock);
-		return -1;
-	}
-#endif
-
-#ifdef __linux
-	int optval = 1;
-	socklen_t  optlen = sizeof(optval);
-
-	if(setsockopt(connectedSock, SOL_SOCKET, SO_KEEPALIVE, &optval, optlen) == SOCKET_ERROR) {
-		PrintError("keepalive error:");
-		CloseSocket(connectedSock);
-		return -1;
-	}
-#endif
-
-	return connectedSock;
+    if ((connectedSock = SetupKeepalive(connectedSock)) == -1) {
+        PrintError("keepalive error:");
+        CloseSocket(connectedSock);
+        return -1;
+    }
+    return connectedSock;
 }
 	
 SOCKET configureClient(char* ip) {
-	SOCKET clientSock;
-	if ((clientSock = socket(AF_INET, SOCK_STREAM, 0)) == INVALID_SOCKET) {
-		PrintError("socket() error:");
-		CloseSocket(clientSock);
-		return -1;
-	}
-	printf("socket() success\n");
+    SOCKET clientSock = CreateSocket();
 
 	struct sockaddr_in clientSockAddr;
 	clientSockAddr.sin_family = AF_INET;
@@ -161,30 +130,11 @@ SOCKET configureClient(char* ip) {
 	}
 	printf("Connected\n");
 
-#ifdef _WIN32
-	DWORD dwBytesRet=0;  
-	struct tcp_keepalive keepalive;
-	keepalive.onoff = TRUE;
-	keepalive.keepalivetime = 7200000;
-	keepalive.keepaliveinterval = 1000;
-
-	if(WSAIoctl(connectedSock, SIO_KEEPALIVE_VALS, &keepalive, sizeof(keepalive), NULL, 0, &dwBytesRet, NULL, NULL) == SOCKET_ERROR) {
-		PrintError("keepalive error:");
-		CloseSocket(connectedSock);
-		return -1;
-	}
-#endif
-
-#ifdef __linux
-	int optval = 1;
-	socklen_t  optlen = sizeof(optval);
-
-	if(setsockopt(clientSock, SOL_SOCKET, SO_KEEPALIVE, &optval, optlen) == SOCKET_ERROR) {
-		PrintError("keepalive error:");
-		CloseSocket(clientSock);
-		return -1;
-	}
-#endif
+    if ((clientSock = SetupKeepalive(clientSock)) == -1) {
+        PrintError("keepalive error:");
+        CloseSocket(clientSock);
+        return -1;
+    }
 
 	return clientSock;
 }
@@ -475,19 +425,52 @@ bool checkCommand(char* command) {
 		|| !strcmp(command, "UPLOAD") || !strcmp(command, "DOWNLOAD"));
 }
 
-void CloseSocket(SOCKET socket) {
+SOCKET SetupKeepalive(SOCKET socket) {
 #ifdef _WIN32
-	closesocket(socket);
+	DWORD dwBytesRet=0;
+	struct tcp_keepalive keepalive;
+	keepalive.onoff = TRUE;
+	keepalive.keepalivetime = 7200000;
+	keepalive.keepaliveinterval = 1000;
+
+	if(WSAIoctl(socket, SIO_KEEPALIVE_VALS, &keepalive, sizeof(keepalive), NULL, 0, &dwBytesRet, NULL, NULL) == SOCKET_ERROR) {
+		return -1;
+	}
+#endif
+
+#ifdef __linux
+	int optval = 1;
+	socklen_t  optlen = sizeof(optval);
+
+	if(setsockopt(socket, SOL_SOCKET, SO_KEEPALIVE, &optval, optlen) == SOCKET_ERROR) {
+		return -1;
+	}
+#endif
+
+	return socket;
+}
+
+SOCKET CreateSocket(void) {
+    SOCKET nooby;
+    if (!validate((nooby = socket(AF_INET, SOCK_STREAM, 0)), INVALID_SOCKET, nooby)) {
+        return -1;
+    }
+    return nooby;
+}
+
+void CloseSocket(SOCKET nooby) {
+#ifdef _WIN32
+	closesocket(nooby);
 	WSACleanup();
 #endif
 
 #ifdef __linux
-	close(socket);
+	close(nooby);
 #endif
 }
 
 void PrintError(const char error_message[]) {
-	printf(error_message);
+	printf("%s", error_message);
 #ifdef _WIN32
 	printf("%ld\n", WSAGetLastError());
 #endif
@@ -495,4 +478,17 @@ void PrintError(const char error_message[]) {
 #ifdef __linux
 		printf("%s\n", strerror(errno));
 #endif
+}
+
+bool __validate(int value, int failed, SOCKET nooby, const char func_name[]) {
+    char* msg = (char*)malloc(strlen(func_name) + 8);
+    memcpy(msg, func_name, strlen(func_name));
+    if (value == failed) {
+        msg[strlen(func_name) + 8] = 0;
+        PrintError(strcat(msg, " error:"));
+        CloseSocket(nooby);
+        return false;
+    }
+    printf("%s success\n", msg);
+    return true;
 }
