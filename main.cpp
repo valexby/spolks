@@ -34,7 +34,7 @@ typedef int SOCKET;
 #define MESSAGE_MAX_SIZE 1024
 #define COMMAND_LENGTH 128
 #define COMMAND_SIZE 4
-#define validate(value, falied, socket) __validate(value, falied, socket, __FUNCTION__)
+#define VALIDATE(value, falied, socket) __validate(value, falied, socket, __FUNCTION__)
 
 SOCKET configureServer(SOCKET &serverSock, char* ip);
 SOCKET configureClient(char* ip);
@@ -48,7 +48,7 @@ void PrintError(const char[]);
 SOCKET SetupKeepalive(SOCKET);
 SOCKET CreateSocket(void);
 bool __validate(int value, int failed, SOCKET socket, const char *func_name);
-
+void init_sockaddr(sockaddr_in &sock, const char* ip);
 struct sockaddr_in lastClientSockAddr;
 
 int main(int argc, char* argv[]) {
@@ -78,18 +78,16 @@ int main(int argc, char* argv[]) {
 SOCKET configureServer(SOCKET &serverSock, char* ip) {
 	serverSock = CreateSocket();
 
-	struct sockaddr_in serverSockAddr;
-	serverSockAddr.sin_family = AF_INET;
-	serverSockAddr.sin_addr.s_addr = inet_addr(ip);
-	serverSockAddr.sin_port = htons(PORT);
+    sockaddr_in serverSockAddr;
+    init_sockaddr(serverSockAddr, ip);
 
     int ret;
     ret = bind(serverSock, (struct sockaddr*)&serverSockAddr, sizeof(serverSockAddr));
-	if (!validate(ret, SOCKET_ERROR, serverSock)) {
+	if (!VALIDATE(ret, SOCKET_ERROR, serverSock)) {
 		return -1;
 	}
 
-	if (!validate(listen(serverSock, 1), SOCKET_ERROR, serverSock)) {
+	if (!VALIDATE(listen(serverSock, 1), SOCKET_ERROR, serverSock)) {
 		return -1;
 	}
 
@@ -98,17 +96,14 @@ SOCKET configureServer(SOCKET &serverSock, char* ip) {
 	socklen_t sockAddrLen = sizeof(struct sockaddr_in);
 
 	printf("Waiting for connection\n");
-	if ((connectedSock = accept(serverSock, (struct sockaddr*)&connectedSockAddr, &sockAddrLen)) == INVALID_SOCKET) {
-		PrintError("accept() error:");
-		CloseSocket(serverSock);
+    connectedSock = accept(serverSock, (struct sockaddr*)&connectedSockAddr, &sockAddrLen);
+	if (!VALIDATE(connectedSock, INVALID_SOCKET, serverSock)) {
 		return -1;
 	}
 	printf("Client(%s) connected\n", inet_ntoa(connectedSockAddr.sin_addr));
 	lastClientSockAddr = connectedSockAddr;
-
-    if ((connectedSock = SetupKeepalive(connectedSock)) == -1) {
-        PrintError("keepalive error:");
-        CloseSocket(connectedSock);
+    connectedSock = SetupKeepalive(connectedSock);
+    if (!VALIDATE(connectedSock, -1, connectedSock)) {
         return -1;
     }
     return connectedSock;
@@ -118,25 +113,19 @@ SOCKET configureClient(char* ip) {
     SOCKET clientSock = CreateSocket();
 
 	struct sockaddr_in clientSockAddr;
-	clientSockAddr.sin_family = AF_INET;
-	clientSockAddr.sin_addr.s_addr = inet_addr(ip);
-	clientSockAddr.sin_port = htons(PORT);
+    init_sockaddr(clientSockAddr, ip);
 
 	printf("Connection to the server\n");
-	if (connect(clientSock, (struct sockaddr*)&clientSockAddr, sizeof(clientSockAddr)) == SOCKET_ERROR) {
-		PrintError("connect() error:");
-		CloseSocket(clientSock);
+    if (!VALIDATE(connect(clientSock, (struct sockaddr*)&clientSockAddr, sizeof(clientSockAddr)), SOCKET_ERROR, clientSock)) {
 		return -1;
 	}
 	printf("Connected\n");
-
-    if ((clientSock = SetupKeepalive(clientSock)) == -1) {
-        PrintError("keepalive error:");
-        CloseSocket(clientSock);
+    clientSock = SetupKeepalive(clientSock);
+    if (!VALIDATE(clientSock, -1, clientSock)) {
         return -1;
     }
 
-	return clientSock;
+	return clientSnock;
 }
 	
 void serverProccess(SOCKET serverSock, SOCKET &clientSock) {
@@ -178,7 +167,7 @@ void serverProccess(SOCKET serverSock, SOCKET &clientSock) {
 			if (!strncmp(buffer, "TIME", 4)) {
 				printf("TIME command\n");
 				char* time = getCurrentTime();
-				sprintf(buffer, "%d", strlen(time));
+				sprintf(buffer, "%ld", strlen(time));
 				send(clientSock, buffer, 4, 0);
 
 				nowRecv = recv(clientSock, buffer, 2, 0);
@@ -193,7 +182,7 @@ void serverProccess(SOCKET serverSock, SOCKET &clientSock) {
 				memcpy(params, buffer + 5, strlen(buffer) - 5);
 				params[strlen(buffer) - 5] = '\0';
 
-				sprintf(buffer, "%d", strlen(buffer) - 5);
+				sprintf(buffer, "%ld", strlen(buffer) - 5);
 				send(clientSock, buffer, 4, 0);
 
 				nowRecv = recv(clientSock, buffer, 2, 0);
@@ -452,7 +441,7 @@ SOCKET SetupKeepalive(SOCKET socket) {
 
 SOCKET CreateSocket(void) {
     SOCKET nooby;
-    if (!validate((nooby = socket(AF_INET, SOCK_STREAM, 0)), INVALID_SOCKET, nooby)) {
+    if (!VALIDATE((nooby = socket(AF_INET, SOCK_STREAM, 0)), INVALID_SOCKET, nooby)) {
         return -1;
     }
     return nooby;
@@ -491,4 +480,11 @@ bool __validate(int value, int failed, SOCKET nooby, const char func_name[]) {
     }
     printf("%s success\n", msg);
     return true;
+}
+
+
+void init_sockaddr(sockaddr_in &sock, const char* ip) {
+    sock.sin_family = AF_INET;
+	sock.sin_addr.s_addr = inet_addr(ip);
+	sock.sin_port = htons(PORT);
 }
