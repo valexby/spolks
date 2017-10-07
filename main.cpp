@@ -473,11 +473,12 @@ bool __validate(int value, int failed, SOCKET nooby, const char func_name[]) {
     char* msg = (char*)malloc(strlen(func_name) + 8);
     memcpy(msg, func_name, strlen(func_name));
     if (value == failed) {
-        msg[strlen(func_name) + 8] = 0;
+        msg[strlen(func_name) + 7] = 0;
         PrintError(strcat(msg, " error:"));
         CloseSocket(nooby);
         return false;
     }
+    msg[strlen(func_name)] = 0;
     printf("%s success\n", msg);
     return true;
 }
