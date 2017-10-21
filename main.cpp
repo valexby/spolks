@@ -22,8 +22,8 @@ typedef int socklen_t;
 #include <arpa/inet.h>
 #include <errno.h>
 #include <unistd.h>
-#define FILE_PATH_UPLOAD "/home/valex/workspace/spolks/in/file.mp4"
-#define FILE_PATH_DOWNLOAD "/home/valex/workspace/spolks/out/file.mp4"
+#define FILE_PATH_UPLOAD "/home/valex/workspace/spolks/in/main.cpp"
+#define FILE_PATH_DOWNLOAD "/home/valex/workspace/spolks/out/main.cpp"
 #define INVALID_SOCKET -1
 #define SOCKET_ERROR -1
 typedef int SOCKET;
@@ -31,7 +31,7 @@ typedef int SOCKET;
 #endif
 
 #define PORT 27015
-#define MESSAGE_MAX_SIZE 1024
+#define MESSAGE_MAX_SIZE 250
 #define COMMAND_LENGTH 128
 #define COMMAND_SIZE 4
 
@@ -71,8 +71,8 @@ int uploadCommand(Type type, SOCKET socket);
 int downloadCommand(Type type, SOCKET socket);
 
 SOCKET configureUDP(Type type, char* ip);
-int _send(SOCKET sock, const char* buf, int len, Protocol protocol);
-int _recv(SOCKET sock, char* buf, int len, Protocol protocol);
+ssize_t _send(SOCKET sock, const char* buf, unsigned char len, Protocol protocol);
+ssize_t _recv(SOCKET sock, char* buf, Protocol protocol);
 
 const char OK_MSG[] = "ok";
 const char END_MSG[] = "end";
@@ -207,76 +207,26 @@ SOCKET configureUDP(Type type, char *ip) {
 void tcpServer(SOCKET serverSock) {
 	bool exit = false;
 
-	fd_set master, temp;
-	SOCKET fd_max = serverSock;
-
-	FD_ZERO(&master);
-	FD_ZERO(&temp);
-
-	FD_SET(serverSock, &master);
-
-	while (!exit) {
-		temp = master;
-		if (select(fd_max + 1, &temp, NULL, NULL, NULL) == -1) {
-			printf("select() error\n");
-			closeSocket(serverSock);
-			return;
-		}
-
-		for (SOCKET i = 0; i <= fd_max; i++) {
-			if (FD_ISSET(i, &temp)) {
-				if (i == serverSock) {
-					SOCKET connectedSock;
-					struct sockaddr_in connectedSockAddr;
-					socklen_t sockAddrLen = sizeof(struct sockaddr_in);
-
-					connectedSock = accept(serverSock, (struct sockaddr*)&connectedSockAddr, &sockAddrLen);
-					if (connectedSock == INVALID_SOCKET) {
-						printError("accept() error:");
-						closeSocket(serverSock);
-						return;
-					}
-					printf("Client(%s) connected\n", inet_ntoa(connectedSockAddr.sin_addr));
-
-					connectedSock = setupKeepalive(connectedSock);
-					if (connectedSock == -1) {
-						printError("keepalive() error:");
-						closeSocket(serverSock);
-						return;
-					}
-
-					FD_SET(connectedSock, &master);
-					if (connectedSock > fd_max) {
-						fd_max = connectedSock;
-					}
-				}
-				else {
-					if (serverListener(i) == -1) {
-						FD_CLR(i, &master);
-					}
-				}
-			}
-		}
-
-		/*if (disconnect && protocol == TCP) {
-		struct sockaddr_in connectedSockAddr;
-		socklen_t sockAddrLen = sizeof(struct sockaddr_in);
-
-		printf("Waiting for connection\n");
-		if ((clientSock = accept(serverSock, (struct sockaddr*)&connectedSockAddr, &sockAddrLen)) == INVALID_SOCKET) {
+	SOCKET connectedSock;
+	struct sockaddr_in connectedSockAddr;
+	socklen_t sockAddrLen = sizeof(struct sockaddr_in);
+    connectedSock = accept(serverSock, (struct sockaddr*)&connectedSockAddr, &sockAddrLen);
+	if (connectedSock == INVALID_SOCKET) {
 		printError("accept() error:");
-		closeSocket(clientSock);
 		closeSocket(serverSock);
 		return;
-		}
-		printf("Client(%s) connected\n", inet_ntoa(connectedSockAddr.sin_addr));
-		if (!strcmp(inet_ntoa(connectedSockAddr.sin_addr), inet_ntoa(lastClientSockAddr.sin_addr))) {
-		canContinue = true;
-		}
-		disconnect = false;
-		lastClientSockAddr = connectedSockAddr;
-		}*/
 	}
+	printf("Client(%s) connected\n", inet_ntoa(connectedSockAddr.sin_addr));
+
+	connectedSock = setupKeepalive(connectedSock);
+	if (connectedSock == -1) {
+		printError("keepalive() error:");
+		closeSocket(serverSock);
+        return;
+	}
+    while (!exit) {
+        serverListener(connectedSock);
+    }
 }
 
 void udpServer(SOCKET serverSock) {
@@ -289,44 +239,35 @@ void udpServer(SOCKET serverSock) {
 
 int serverListener(SOCKET sock) {
 	int nowRecv;
-	if (_recv(sock, buffer, 4, protocol) > 0) {
-		nowRecv = atoi(buffer);
-		_send(sock, OK_MSG, 2, protocol);
+    nowRecv = _recv(sock, buffer, protocol);
+    buffer[nowRecv] = '\0';
 
-		nowRecv = _recv(sock, buffer, nowRecv, protocol);
-		buffer[nowRecv] = '\0';
+    if (!strncmp(buffer, "TIME", 4)) {
+        timeCommand(SERVER, sock);
+        return 0;
+    }
+    else if (!strncmp(buffer, "ECHO", 4)) {
+        echoCommand(SERVER, sock);
+        return 0;
+    }
+    else if (!strncmp(buffer, "CLOSE", 5)) {
+        printf("CLOSE command\n");
+        printf("Client(%s) disconnected\n", inet_ntoa(lastClientSockAddr.sin_addr));
+        return -1;
+    }
+    else if (!strcmp(buffer, "UPLOAD")) {
+        if (uploadCommand(SERVER, sock) == -1) {
+            return -1;
+        }
+        return 0;
+    }
 
-		if (!strncmp(buffer, "TIME", 4)) {
-			timeCommand(SERVER, sock);
-			return 0;
-		}
-		else if (!strncmp(buffer, "ECHO", 4)) {
-			echoCommand(SERVER, sock);
-			return 0;
-		}
-		else if (!strncmp(buffer, "CLOSE", 5)) {
-			printf("CLOSE command\n");
-			printf("Client(%s) disconnected\n", inet_ntoa(lastClientSockAddr.sin_addr));
-			return -1;
-		}
-		else if (!strcmp(buffer, "UPLOAD")) {
-			if (uploadCommand(SERVER, sock) == -1) {
-				return -1;
-			}
-			return 0;
-		}
-
-		else if (!strcmp(buffer, "DOWNLOAD")) {
-			if (downloadCommand(SERVER, sock) == -1) {
-				return -1;
-			}
-			return 0;
-		}
-	}
-	else {
-		printf("Client(%s) disconnected\n", inet_ntoa(lastClientSockAddr.sin_addr));
-		return -1;
-	}
+    else if (!strcmp(buffer, "DOWNLOAD")) {
+        if (downloadCommand(SERVER, sock) == -1) {
+            return -1;
+        }
+        return 0;
+    }
 	return 0;
 }
 
@@ -341,35 +282,23 @@ void clientListener(SOCKET sock) {
 		command[strlen(command) - 1] = 0;
 
 		if (checkCommand(command)) {
-			int remainSend = (int)strlen(command);
-			int nowSend = 0, nowRecv = 0;
+            _send(sock, command, (char)strlen(command), protocol);
 
-			sprintf(buffer, "%d", remainSend);
-			_send(sock, buffer, 4, protocol);
-
-			nowRecv = _recv(sock, buffer, 2, protocol);
-			buffer[nowRecv] = '\0';
-
-			if (!strcmp(buffer, "ok")) {
-				sprintf(buffer, "%s", command);
-				_send(sock, buffer, remainSend, protocol);
-
-				if (!strcmp(command, "TIME")) {
-					timeCommand(CLIENT, sock);
-				}
-				else if (!strncmp(command, "ECHO", 4)) {
-					echoCommand(CLIENT, sock);
-				}
-				else if (!strcmp(command, "CLOSE")) {
-					exit = true;
-				}
-				else if (!strcmp(command, "UPLOAD")) {
-					uploadCommand(CLIENT, sock);
-				}
-				else if (!strcmp(command, "DOWNLOAD")) {
-					downloadCommand(CLIENT, sock);
-				}
-			}
+            if (!strcmp(command, "TIME")) {
+                timeCommand(CLIENT, sock);
+            }
+            else if (!strncmp(command, "ECHO", 4)) {
+                echoCommand(CLIENT, sock);
+            }
+            else if (!strcmp(command, "CLOSE")) {
+                exit = true;
+            }
+            else if (!strcmp(command, "UPLOAD")) {
+                uploadCommand(CLIENT, sock);
+            }
+            else if (!strcmp(command, "DOWNLOAD")) {
+                downloadCommand(CLIENT, sock);
+            }
 		}
 		else {
 			printf("Wrong command\n");
@@ -481,34 +410,21 @@ void init_sockaddr(sockaddr_in &sock, const char* ip) {
 void timeCommand(Type type, SOCKET socket) {
 	int nowRecv;
 	if (type == CLIENT) {
-		_recv(socket, buffer, 4, protocol);
-		nowRecv = atoi(buffer);
-		_send(socket, OK_MSG, 2, protocol);
-		nowRecv = _recv(socket, buffer, nowRecv, protocol);
+        nowRecv = _recv(socket, buffer, protocol);
 		buffer[nowRecv] = '\0';
 		printf("Server time:%s", buffer);
 	}
 	else {
 		printf("TIME command\n");
 		char* time = getCurrentTime();
-		sprintf(buffer, "%ld", strlen(time));
-		_send(socket, buffer, 4, protocol);
-
-		nowRecv = _recv(socket, buffer, 2, protocol);
-		buffer[nowRecv] = '\0';
-		if (!strcmp(buffer, "ok")) {
-			_send(socket, time, strlen(time), protocol);
-		}
+        _send(socket, time, (char)strlen(time), protocol);
 	}
 }
 
 void echoCommand(Type type, SOCKET socket) {
 	int nowRecv;
 	if (type == CLIENT) {
-		_recv(socket, buffer, 4, protocol);
-		nowRecv = atoi(buffer);
-		_send(socket, OK_MSG, 2, protocol);
-		nowRecv = _recv(socket, buffer, nowRecv, protocol);
+		nowRecv = _recv(socket, buffer, protocol);
 		buffer[nowRecv] = '\0';
 		printf("ECHO result:%s\n", buffer);
 		for (int i = 0; i < MESSAGE_MAX_SIZE; i++) {
@@ -517,126 +433,65 @@ void echoCommand(Type type, SOCKET socket) {
 	}
 	else {
 		printf("ECHO command\n");
-		char* params = (char*)malloc(sizeof(char) * (strlen(buffer) - 4));
-		memcpy(params, buffer + 5, strlen(buffer) - 5);
-		params[strlen(buffer) - 5] = '\0';
-
-		sprintf(buffer, "%ld", strlen(buffer) - 5);
-		_send(socket, buffer, 4, protocol);
-
-		nowRecv = _recv(socket, buffer, 2, protocol);
-		buffer[nowRecv] = '\0';
-		if (!strcmp(buffer, "ok")) {
-			_send(socket, params, strlen(params), protocol);
-		}
-		free(params);
+        _send(socket, buffer + 5, strlen(buffer) - 5, protocol);
 	}
 }
 
 int uploadCommand(Type type, SOCKET socket) {
 	FILE *file;
-	int nowRecv, size, nowReaded = 0, readed;
+	int nowRecv, size, nowReaded = 0, readed = 0;
 
 	if (type == CLIENT) {
 		file = fopen(FILE_PATH_UPLOAD, "r+b");
-
-		_send(socket, "!", 1, protocol);
-		_recv(socket, buffer, 4, protocol);
-		nowRecv = atoi(buffer);
-		_recv(socket, buffer, nowRecv, protocol);
 		fseek(file, 0, SEEK_END);
 		size = ftell(file);
-		fseek(file, atoi(buffer), SEEK_SET);
-		readed = atoi(buffer);
+        fseek(file, 0, SEEK_SET);
 
 		while ((nowReaded = fread(buffer, 1, sizeof(buffer), file)) != 0) {
 			readed += nowReaded;
 			_send(socket, buffer, nowReaded, protocol);
-			nowRecv = _recv(socket, buffer, 2, protocol);
-			buffer[nowRecv] = '\0';
-			if (strcmp(buffer, OK_MSG)) {
-				break;
-			}
 			//printf("[%1.00f/100]\r", (float)(((float)readed / (float)size) * 100));
 		}
 		printf("\n");
 		_send(socket, END_MSG, 3, protocol);
-		fclose(file);
 	}
 	else {
-		file = fopen(FILE_PATH_DOWNLOAD, "a+b");
-		if (canContinue) {
-			fseek(file, 0, SEEK_END);
-		}
+		file = fopen(FILE_PATH_DOWNLOAD, "wb");
 
 		printf("UPLOAD command\n");
-		nowRecv = _recv(socket, buffer, 1, protocol);
-		buffer[nowRecv] = '\0';
-        if (strncmp(buffer, "!", 1)) {
-            return 0;
-        }
-        sprintf(buffer, "%ld", strlen(buffer));
-        _send(socket, buffer, 4, protocol);
-        sprintf(buffer, "%ld", ftell(file));
-        _send(socket, buffer, strlen(buffer), protocol);
-        do {
-            nowRecv = _recv(socket, buffer, sizeof(buffer), protocol);
+        nowRecv = _recv(socket, buffer, protocol);
+        while (strncmp(buffer, END_MSG, 3))
+        {
             if (nowRecv <= 0) {
                 printf("Client(%s) disconnected\n", inet_ntoa(lastClientSockAddr.sin_addr));
                 fclose(file);
                 return -1;
             }
-            if (!strncmp(buffer, END_MSG, 3)) {
-                break;
-            }
             fwrite(buffer, 1, nowRecv, file);
-            _send(socket, OK_MSG, 2, protocol);
-        } while (1);
-        fclose(file);
+            nowRecv = _recv(socket, buffer, protocol);
+        }
 	}
+    fclose(file);
     return 0;
-}
-
-char* concat(const char *s1, const char *s2) {
-	char *result = (char*)malloc(strlen(s1) + strlen(s2) + 1);//+1 for the null-terminator
-													   //in real code you would check for errors in malloc here
-	strcpy(result, s1);
-	strcat(result, s2);
-	return result;
 }
 
 int downloadCommand(Type type, SOCKET socket) {
 	FILE *file;
 	int nowRecv, size, readed, nowReaded = 0;
-	sprintf(buffer, "%d", socket);
 	if (type == CLIENT) {
-		file = fopen(concat(concat(FILE_PATH_DOWNLOAD, buffer), ".mp4"), "a+b");
+		file = fopen(FILE_PATH_DOWNLOAD, "wb");
 
-		_recv(socket, buffer, 4, protocol);
-		nowRecv = atoi(buffer);
-		_recv(socket, buffer, nowRecv, protocol);
+		_recv(socket, buffer, protocol);
 		size = atoi(buffer);
-		_recv(socket, buffer, 4, protocol);
-		nowRecv = atoi(buffer);
-		_recv(socket, buffer, nowRecv, protocol);
-		readed = atoi(buffer);
 
-		fseek(file, 0, SEEK_END);
-		fseek(file, atoi(buffer), SEEK_SET);
-		do {
-			nowRecv = _recv(socket, buffer, sizeof(buffer), protocol);
-			if (!strncmp(buffer, "end", 3)) {
-				break;
-			}
+        nowRecv = _recv(socket, buffer, protocol);
+		while (strncmp(buffer, "end", 3)) {
 			readed += nowRecv;
 			fwrite(buffer, 1, nowRecv, file);
-			_send(socket, OK_MSG, 2, protocol);
+            nowRecv = _recv(socket, buffer, protocol);
 			//printf("[%1.00f/100]\r", (float)(((float)readed / (float)size) * 100));
-		} while (1);
+		}
 		printf("\n");
-		fclose(file);
-
-		return 0;
 	}
 	else {
 		printf("DOWNLOAD command\n");
@@ -644,57 +499,36 @@ int downloadCommand(Type type, SOCKET socket) {
 		file = fopen(FILE_PATH_UPLOAD, "r+b");
 		fseek(file, 0, SEEK_END);
 		sprintf(buffer, "%ld", ftell(file));
-		sprintf(buffer, "%ld", strlen(buffer));
-		_send(socket, buffer, 4, protocol);
-		sprintf(buffer, "%ld", ftell(file));
-		_send(socket, buffer, strlen(buffer), protocol);
-
-		if (canContinue) {
-			canContinue = false;
-		}
-		else {
-			lastPos = 0;
-		}
-		fseek(file, lastPos, SEEK_SET);
-		sprintf(buffer, "%ld", strlen(buffer));
-		_send(socket, buffer, 4, protocol);
-		sprintf(buffer, "%ld", ftell(file));
-		_send(socket, buffer, strlen(buffer), protocol);
+		_send(socket, buffer, (unsigned char)strlen(buffer), protocol);
+        fseek(file, 0, SEEK_SET);
 
 		while ((nowReaded = fread(buffer, 1, sizeof(buffer), file)) != 0) {
-			_send(socket, buffer, nowReaded, protocol);
-			nowRecv = _recv(socket, buffer, 2, protocol);
-			if (nowRecv <= 0) {
+			if (_send(socket, buffer, nowReaded, protocol) <= 0) {
 				printf("Client(%s) disconnected\n", inet_ntoa(lastClientSockAddr.sin_addr));
 				fclose(file);
 				return -1;
-
 			}
-			if (!strncmp(buffer, "end", 3)) {
-				break;
-			}
-			buffer[nowRecv] = '\0';
-			if (strcmp(buffer, "ok")) {
-				break;
-			}
-			lastPos = ftell(file);
 		}
-
 		_send(socket, END_MSG, 3, protocol);
-
-		fclose(file);
-
-		return 0;
 	}
+    fclose(file);
+    return 0;
 }
 
-int _send(SOCKET sock, const char* buf, int len, Protocol protocol) {
-	int nowSend = 0;
+ssize_t _send(SOCKET sock, const char* buf, unsigned char len, Protocol protocol) {
+	int nowSend;
+    char ok[2];
 	if (protocol == TCP) {
-		nowSend = send(sock, buf, len, 0);
-		if (send(sock, "^", 1, MSG_OOB) > 0) {
-			printf("%d bytes sent\n", nowSend);
-		}
+        send(sock, &len, 1, MSG_OOB);
+		nowSend = send(sock, buf, (size_t)len, 0);
+        if (nowSend != (ssize_t)len) {
+            return -1;
+        }
+        printf("%d bytes sent\n", nowSend);
+        recv(sock, ok, 2, 0);
+        if (strcmp(ok, OK_MSG)) {
+            return -1;
+        }
 	}
 	else {
 		nowSend = sendto(sock, buf, len, 0, (struct sockaddr*) &lastClientSockAddr, sizeof(lastClientSockAddr));
@@ -703,13 +537,17 @@ int _send(SOCKET sock, const char* buf, int len, Protocol protocol) {
 	return nowSend;
 }
 
-int _recv(SOCKET sock, char* buf, int len, Protocol protocol) {
-	int nowRecv = 0;
+ssize_t _recv(SOCKET sock, char* buf, Protocol protocol) {
+	int nowRecv;
+    unsigned char len = 0;
 	if (protocol == TCP) {
-		nowRecv = recv(sock, buf, len, 0);
-		if (recv(sock, oobBuf, 1, MSG_OOB) > 0 && !strcmp(oobBuf, "^")) {
-			printf("%d bytes received\n", nowRecv);
-		}
+        while (recv(sock, &len, 1, MSG_OOB) == -1) {};
+		nowRecv = recv(sock, buf, (size_t)len, 0);
+        if (nowRecv != (ssize_t)len) {
+            return -1;
+        }
+        printf("%d bytes received\n", nowRecv);
+        send(sock, OK_MSG, 2, 0);
 	}
 	else {
 		socklen_t slen = sizeof(lastClientSockAddr);
