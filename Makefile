@@ -7,10 +7,10 @@
 TARGET = lab
 
 # C source code
-SRC = main.cpp
+SRC =
 
 # CPP source code
-CXXSRC =
+CXXSRC = main.cpp
 
 # Common Flags
 CPPFLAGS += -Wall -Wextra -pipe
