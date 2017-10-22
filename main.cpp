@@ -22,8 +22,8 @@ typedef int socklen_t;
 #include <arpa/inet.h>
 #include <errno.h>
 #include <unistd.h>
-#define FILE_PATH_UPLOAD "/home/valex/workspace/spolks/in/main.cpp"
-#define FILE_PATH_DOWNLOAD "/home/valex/workspace/spolks/out/main.cpp"
+#define FILE_PATH_UPLOAD "/home/valex/workspace/spolks/in/file.mp4"
+#define FILE_PATH_DOWNLOAD "/home/valex/workspace/spolks/out/file.mp4"
 #define INVALID_SOCKET -1
 #define SOCKET_ERROR -1
 typedef int SOCKET;
@@ -282,7 +282,7 @@ void clientListener(SOCKET sock) {
 		command[strlen(command) - 1] = 0;
 
 		if (checkCommand(command)) {
-            _send(sock, command, (char)strlen(command), protocol);
+            _send(sock, command, (unsigned char)strlen(command), protocol);
 
             if (!strcmp(command, "TIME")) {
                 timeCommand(CLIENT, sock);
@@ -516,7 +516,7 @@ int downloadCommand(Type type, SOCKET socket) {
 }
 
 ssize_t _send(SOCKET sock, const char* buf, unsigned char len, Protocol protocol) {
-	int nowSend;
+	int nowSend, nowRecv;
     char ok[2];
 	if (protocol == TCP) {
         send(sock, &len, 1, MSG_OOB);
@@ -525,20 +525,28 @@ ssize_t _send(SOCKET sock, const char* buf, unsigned char len, Protocol protocol
             return -1;
         }
         printf("%d bytes sent\n", nowSend);
-        recv(sock, ok, 2, 0);
+        nowRecv = recv(sock, ok, 2, 0);
+        printf("%d bytes received\n", nowRecv);
         if (strcmp(ok, OK_MSG)) {
             return -1;
         }
 	}
 	else {
-		nowSend = sendto(sock, buf, len, 0, (struct sockaddr*) &lastClientSockAddr, sizeof(lastClientSockAddr));
-	}
-
+		socklen_t slen = sizeof(lastClientSockAddr);
+        sendto(sock, &len, 1, 0, (struct sockaddr*) &lastClientSockAddr, slen);
+		nowSend = sendto(sock, buf, len, 0, (struct sockaddr*) &lastClientSockAddr, slen);
+        if (nowSend != (ssize_t)len) {
+            return -1;
+        }
+        printf("%d bytes sent\n", nowSend);
+        nowRecv = recvfrom(sock, ok, 2, 0, (struct sockaddr*) &lastClientSockAddr, &slen);
+        printf("%d bytes received\n", nowRecv);
+    }
 	return nowSend;
 }
 
 ssize_t _recv(SOCKET sock, char* buf, Protocol protocol) {
-	int nowRecv;
+	int nowRecv, nowSend;
     unsigned char len = 0;
 	if (protocol == TCP) {
         while (recv(sock, &len, 1, MSG_OOB) == -1) {};
@@ -547,11 +555,17 @@ ssize_t _recv(SOCKET sock, char* buf, Protocol protocol) {
             return -1;
         }
         printf("%d bytes received\n", nowRecv);
-        send(sock, OK_MSG, 2, 0);
+        nowSend = send(sock, OK_MSG, 2, 0);
+        printf("%d bytes sent\n", nowSend);
 	}
 	else {
-		socklen_t slen = sizeof(lastClientSockAddr);
+		socklen_t slen;
+		nowRecv = recvfrom(sock, &len, 1, 0, (struct sockaddr*) &lastClientSockAddr, &slen);
+        printf("%d bytes received\n", nowRecv);
 		nowRecv = recvfrom(sock, buf, len, 0, (struct sockaddr*) &lastClientSockAddr, &slen);
+        printf("%d bytes received\n", nowRecv);
+		nowSend = sendto(sock, OK_MSG, 2, 0, (struct sockaddr*) &lastClientSockAddr, slen);
+        printf("%d bytes sent\n", nowSend);
 	}
 
 	return nowRecv;
