@@ -184,11 +184,14 @@ SOCKET configureClient(char* ip) {
 
 SOCKET configureUDP(Type type, char *ip) {
 	SOCKET sock;
+    struct timeval read_timeout;
     sock = socket(AF_INET, SOCK_DGRAM, 0);
 	if (!validate(sock, INVALID_SOCKET, sock, "socket")) {
 		return -1;
 	}
-	
+    read_timeout.tv_sec = 1;
+    read_timeout.tv_usec = 0;
+    setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &read_timeout, sizeof read_timeout);
 	if (type == SERVER) {
 		sockaddr_in sockAddr;
 		init_sockaddr(sockAddr, ip);
@@ -239,7 +242,26 @@ void udpServer(SOCKET serverSock) {
 
 int serverListener(SOCKET sock) {
 	int nowRecv;
+    struct timeval read_timeout;
+
+    if (protocol == UDP) {
+        read_timeout.tv_sec = 0;
+        read_timeout.tv_usec = 0;
+        setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &read_timeout, sizeof read_timeout);
+    }
+
     nowRecv = _recv(sock, buffer, protocol);
+    if (nowRecv == -1) {
+        printError("Server failure : ");
+        return -1;
+    }
+
+    if (protocol == UDP) {
+        read_timeout.tv_sec = 1;
+        read_timeout.tv_usec = 0;
+        setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &read_timeout, sizeof read_timeout);
+    }
+
     buffer[nowRecv] = '\0';
 
     if (!strncmp(buffer, "TIME", 4)) {
@@ -282,7 +304,10 @@ void clientListener(SOCKET sock) {
 		command[strlen(command) - 1] = 0;
 
 		if (checkCommand(command)) {
-            _send(sock, command, (unsigned char)strlen(command), protocol);
+            if (_send(sock, command, (unsigned char)strlen(command), protocol) == -1 ) {
+                printError("Client failed : ");
+                continue;
+            }
 
             if (!strcmp(command, "TIME")) {
                 timeCommand(CLIENT, sock);
@@ -411,13 +436,20 @@ void timeCommand(Type type, SOCKET socket) {
 	int nowRecv;
 	if (type == CLIENT) {
         nowRecv = _recv(socket, buffer, protocol);
+        if (nowRecv == -1) {
+            printError("TIME failed : ");
+            return;
+        }
 		buffer[nowRecv] = '\0';
 		printf("Server time:%s", buffer);
 	}
 	else {
 		printf("TIME command\n");
 		char* time = getCurrentTime();
-        _send(socket, time, (char)strlen(time), protocol);
+        if (_send(socket, time, (char)strlen(time), protocol) == -1) {
+            printError("TIME failed : ");
+            return;
+        }
 	}
 }
 
@@ -425,6 +457,10 @@ void echoCommand(Type type, SOCKET socket) {
 	int nowRecv;
 	if (type == CLIENT) {
 		nowRecv = _recv(socket, buffer, protocol);
+        if (nowRecv == -1) {
+            printError("ECHO failed : ");
+            return;
+        }
 		buffer[nowRecv] = '\0';
 		printf("ECHO result:%s\n", buffer);
 		for (int i = 0; i < MESSAGE_MAX_SIZE; i++) {
@@ -433,7 +469,10 @@ void echoCommand(Type type, SOCKET socket) {
 	}
 	else {
 		printf("ECHO command\n");
-        _send(socket, buffer + 5, strlen(buffer) - 5, protocol);
+        if (_send(socket, buffer + 5, strlen(buffer) - 5, protocol) == -1) {
+            printError("Echo failed : ");
+            return;
+        }
 	}
 }
 
@@ -449,11 +488,19 @@ int uploadCommand(Type type, SOCKET socket) {
 
 		while ((nowReaded = fread(buffer, 1, sizeof(buffer), file)) != 0) {
 			readed += nowReaded;
-			_send(socket, buffer, nowReaded, protocol);
+            if (_send(socket, buffer, nowReaded, protocol) == -1) {
+                printError("Upload aborted : ");
+                fclose(file);
+                return -1;
+            }
 			//printf("[%1.00f/100]\r", (float)(((float)readed / (float)size) * 100));
 		}
 		printf("\n");
-		_send(socket, END_MSG, 3, protocol);
+		if (_send(socket, END_MSG, 3, protocol) == -1) {
+            printError("Upload aborted : ");
+            fclose(file);
+            return -1;
+        }
 	}
 	else {
 		file = fopen(FILE_PATH_DOWNLOAD, "wb");
@@ -463,7 +510,7 @@ int uploadCommand(Type type, SOCKET socket) {
         while (strncmp(buffer, END_MSG, 3))
         {
             if (nowRecv <= 0) {
-                printf("Client(%s) disconnected\n", inet_ntoa(lastClientSockAddr.sin_addr));
+                printError("Upload aborted : ");
                 fclose(file);
                 return -1;
             }
@@ -481,11 +528,20 @@ int downloadCommand(Type type, SOCKET socket) {
 	if (type == CLIENT) {
 		file = fopen(FILE_PATH_DOWNLOAD, "wb");
 
-		_recv(socket, buffer, protocol);
+		if (_recv(socket, buffer, protocol) == -1) {
+            printError("Download aborted : ");
+            fclose(file);
+            return -1;
+        }
 		size = atoi(buffer);
 
         nowRecv = _recv(socket, buffer, protocol);
 		while (strncmp(buffer, "end", 3)) {
+            if (nowRecv == -1) {
+                printError("Download aborted : ");
+                fclose(file);
+                return -1;
+            }
 			readed += nowRecv;
 			fwrite(buffer, 1, nowRecv, file);
             nowRecv = _recv(socket, buffer, protocol);
@@ -499,25 +555,33 @@ int downloadCommand(Type type, SOCKET socket) {
 		file = fopen(FILE_PATH_UPLOAD, "r+b");
 		fseek(file, 0, SEEK_END);
 		sprintf(buffer, "%ld", ftell(file));
-		_send(socket, buffer, (unsigned char)strlen(buffer), protocol);
+		if (_send(socket, buffer, (unsigned char)strlen(buffer), protocol) == -1) {
+            printError("Download aborted : ");
+            fclose(file);
+            return -1;
+        }
         fseek(file, 0, SEEK_SET);
 
 		while ((nowReaded = fread(buffer, 1, sizeof(buffer), file)) != 0) {
 			if (_send(socket, buffer, nowReaded, protocol) <= 0) {
-				printf("Client(%s) disconnected\n", inet_ntoa(lastClientSockAddr.sin_addr));
+                printError("Download aborted : ");
 				fclose(file);
 				return -1;
 			}
 		}
-		_send(socket, END_MSG, 3, protocol);
+		if (_send(socket, END_MSG, 3, protocol) == -1) {
+            printError("Download aborted : ");
+            fclose(file);
+            return -1;
+        }
 	}
     fclose(file);
     return 0;
 }
 
 ssize_t _send(SOCKET sock, const char* buf, unsigned char len, Protocol protocol) {
-	int nowSend, nowRecv;
-    char ok[2];
+	int nowSend, nowRecv = 0;
+    char ok[2] = "o";
 	if (protocol == TCP) {
         send(sock, &len, 1, MSG_OOB);
 		nowSend = send(sock, buf, (size_t)len, 0);
@@ -532,22 +596,23 @@ ssize_t _send(SOCKET sock, const char* buf, unsigned char len, Protocol protocol
         }
 	}
 	else {
-		socklen_t slen = sizeof(lastClientSockAddr);
-        sendto(sock, &len, 1, 0, (struct sockaddr*) &lastClientSockAddr, slen);
-		nowSend = sendto(sock, buf, len, 0, (struct sockaddr*) &lastClientSockAddr, slen);
-        if (nowSend != (ssize_t)len) {
-            return -1;
-        }
+        socklen_t slen = sizeof(lastClientSockAddr);
+        nowSend = sendto(sock, &len, 1, 0, (struct sockaddr*) &lastClientSockAddr, slen);
+        printf("%d bytes sent\n", nowSend);
+        nowSend = sendto(sock, buf, len, 0, (struct sockaddr*) &lastClientSockAddr, slen);
         printf("%d bytes sent\n", nowSend);
         nowRecv = recvfrom(sock, ok, 2, 0, (struct sockaddr*) &lastClientSockAddr, &slen);
+        if (nowRecv == -1) {
+            return -1;
+        }
         printf("%d bytes received\n", nowRecv);
     }
 	return nowSend;
 }
 
 ssize_t _recv(SOCKET sock, char* buf, Protocol protocol) {
-	int nowRecv, nowSend;
-    unsigned char len = 0;
+	int nowRecv = 0, nowSend;
+    unsigned char len = -1;
 	if (protocol == TCP) {
         while (recv(sock, &len, 1, MSG_OOB) == -1) {};
 		nowRecv = recv(sock, buf, (size_t)len, 0);
@@ -560,9 +625,15 @@ ssize_t _recv(SOCKET sock, char* buf, Protocol protocol) {
 	}
 	else {
 		socklen_t slen;
-		nowRecv = recvfrom(sock, &len, 1, 0, (struct sockaddr*) &lastClientSockAddr, &slen);
+        nowRecv = recvfrom(sock, &len, 1, 0, (struct sockaddr*) &lastClientSockAddr, &slen);
+        if (nowRecv == -1) {
+            return -1;
+        }
         printf("%d bytes received\n", nowRecv);
-		nowRecv = recvfrom(sock, buf, len, 0, (struct sockaddr*) &lastClientSockAddr, &slen);
+        nowRecv = recvfrom(sock, buf, len, 0, (struct sockaddr*) &lastClientSockAddr, &slen);
+        if (nowRecv == -1) {
+            return -1;
+        }
         printf("%d bytes received\n", nowRecv);
 		nowSend = sendto(sock, OK_MSG, 2, 0, (struct sockaddr*) &lastClientSockAddr, slen);
         printf("%d bytes sent\n", nowSend);
