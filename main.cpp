@@ -22,8 +22,8 @@ typedef int socklen_t;
 #include <arpa/inet.h>
 #include <errno.h>
 #include <unistd.h>
-#define FILE_PATH_UPLOAD "/home/valex/workspace/spolks/in/file.mp4"
-#define FILE_PATH_DOWNLOAD "/home/valex/workspace/spolks/out/file.mp4"
+#define FILE_PATH_UPLOAD "/home/valex/workspace/spolks/in/file.webm"
+#define FILE_PATH_DOWNLOAD "/home/valex/workspace/spolks/out/file.webm"
 #define INVALID_SOCKET -1
 #define SOCKET_ERROR -1
 typedef int SOCKET;
@@ -34,6 +34,7 @@ typedef int SOCKET;
 #define MESSAGE_MAX_SIZE 250
 #define COMMAND_LENGTH 128
 #define COMMAND_SIZE 4
+#define MAX_SEQ_NUMB 4
 
 enum Type {
 	CLIENT, SERVER
@@ -46,7 +47,7 @@ struct sockaddr_in lastClientSockAddr;
 char buffer[MESSAGE_MAX_SIZE];
 char oobBuf[1];
 bool canContinue = false;
-int lastPos = 0;
+unsigned char seq_number = 0;
 Protocol protocol = TCP;
 
 int configureServer(SOCKET &serverSock, char* ip);
@@ -73,6 +74,8 @@ int downloadCommand(Type type, SOCKET socket);
 SOCKET configureUDP(Type type, char* ip);
 ssize_t _send(SOCKET sock, const char* buf, unsigned char len, Protocol protocol);
 ssize_t _recv(SOCKET sock, char* buf, Protocol protocol);
+void inc_seq_numb(unsigned char &current_seq_numb);
+int comp_seq_numb(unsigned char first, unsigned char second);
 
 const char OK_MSG[] = "ok";
 const char END_MSG[] = "end";
@@ -509,7 +512,7 @@ int uploadCommand(Type type, SOCKET socket) {
         nowRecv = _recv(socket, buffer, protocol);
         while (strncmp(buffer, END_MSG, 3))
         {
-            if (nowRecv <= 0) {
+            if (nowRecv < 0) {
                 printError("Upload aborted : ");
                 fclose(file);
                 return -1;
@@ -580,7 +583,7 @@ int downloadCommand(Type type, SOCKET socket) {
 }
 
 ssize_t _send(SOCKET sock, const char* buf, unsigned char len, Protocol protocol) {
-	int nowSend, nowRecv = 0;
+	int nowSend, nowRecv = -1;
     char ok[2] = "o";
 	if (protocol == TCP) {
         send(sock, &len, 1, MSG_OOB);
@@ -597,21 +600,24 @@ ssize_t _send(SOCKET sock, const char* buf, unsigned char len, Protocol protocol
 	}
 	else {
         socklen_t slen = sizeof(lastClientSockAddr);
-        nowSend = sendto(sock, &len, 1, 0, (struct sockaddr*) &lastClientSockAddr, slen);
-        printf("%d bytes sent\n", nowSend);
-        nowSend = sendto(sock, buf, len, 0, (struct sockaddr*) &lastClientSockAddr, slen);
-        printf("%d bytes sent\n", nowSend);
-        nowRecv = recvfrom(sock, ok, 2, 0, (struct sockaddr*) &lastClientSockAddr, &slen);
-        if (nowRecv == -1) {
-            return -1;
+        while (nowRecv == -1)
+        {
+            nowSend = sendto(sock, &seq_number, 1, 0, (struct sockaddr*) &lastClientSockAddr, slen);
+            printf("%d bytes sent\n", nowSend);
+            nowSend = sendto(sock, &len, 1, 0, (struct sockaddr*) &lastClientSockAddr, slen);
+            printf("%d bytes sent\n", nowSend);
+            nowSend = sendto(sock, buf, len, 0, (struct sockaddr*) &lastClientSockAddr, slen);
+            printf("%d bytes sent\n", nowSend);
+            nowRecv = recvfrom(sock, ok, 2, 0, (struct sockaddr*) &lastClientSockAddr, &slen);
+            printf("%d bytes received\n", nowRecv);
         }
-        printf("%d bytes received\n", nowRecv);
+        inc_seq_numb(seq_number);
     }
 	return nowSend;
 }
 
 ssize_t _recv(SOCKET sock, char* buf, Protocol protocol) {
-	int nowRecv = 0, nowSend;
+	int nowRecv = -1, nowSend;
     unsigned char len = -1;
 	if (protocol == TCP) {
         while (recv(sock, &len, 1, MSG_OOB) == -1) {};
@@ -625,19 +631,58 @@ ssize_t _recv(SOCKET sock, char* buf, Protocol protocol) {
 	}
 	else {
 		socklen_t slen;
-        nowRecv = recvfrom(sock, &len, 1, 0, (struct sockaddr*) &lastClientSockAddr, &slen);
-        if (nowRecv == -1) {
-            return -1;
+        unsigned char recv_seq;
+        while (nowRecv == -1)
+        {
+            nowRecv = recvfrom(sock, &recv_seq, 1, 0, (struct sockaddr*) &lastClientSockAddr, &slen);
+            if (nowRecv == -1) continue;
+            printf("%d bytes received\n", nowRecv);
+            nowRecv = recvfrom(sock, &len, 1, 0, (struct sockaddr*) &lastClientSockAddr, &slen);
+            if (nowRecv == -1) continue;
+            printf("%d bytes received\n", nowRecv);
+            nowRecv = recvfrom(sock, buf, len, 0, (struct sockaddr*) &lastClientSockAddr, &slen);
         }
         printf("%d bytes received\n", nowRecv);
-        nowRecv = recvfrom(sock, buf, len, 0, (struct sockaddr*) &lastClientSockAddr, &slen);
-        if (nowRecv == -1) {
+        switch (comp_seq_numb(recv_seq, seq_number)) {
+        case 0:
+            inc_seq_numb(seq_number);
+            break;
+        case 1:
+            nowRecv = 0;
+            break;
+        case -1:
+            printf("Somethin bad happend with seq numbers!\nCurrent %d\nReceived %d\n", seq_number, recv_seq);
             return -1;
         }
-        printf("%d bytes received\n", nowRecv);
 		nowSend = sendto(sock, OK_MSG, 2, 0, (struct sockaddr*) &lastClientSockAddr, slen);
         printf("%d bytes sent\n", nowSend);
 	}
 
 	return nowRecv;
+}
+
+void inc_seq_numb(unsigned char &cur_seq_number) {
+    if (cur_seq_number == MAX_SEQ_NUMB) {
+        cur_seq_number = 0;
+    }
+    else {
+        cur_seq_number++;
+    }
+    printf("New seq number %d\n", int(seq_number));
+}
+
+int comp_seq_numb(unsigned char first, unsigned char second) {
+    if (first == second) {
+        return 0;
+    }
+    if (first == 0 && second == MAX_SEQ_NUMB) {
+        return -1;
+    }
+    if (first == MAX_SEQ_NUMB && second == 0) {
+        return 1;
+    }
+    if (first > second) {
+        return -1;
+    }
+    return 1;
 }
