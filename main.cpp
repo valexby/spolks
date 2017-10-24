@@ -2,6 +2,7 @@
 #include <time.h>
 #include <string.h>
 #include <stdio.h>
+#include <time.h>
 
 #ifdef _WIN32
 
@@ -22,8 +23,8 @@ typedef int socklen_t;
 #include <arpa/inet.h>
 #include <errno.h>
 #include <unistd.h>
-#define FILE_PATH_UPLOAD "/home/valex/workspace/spolks/in/file.webm"
-#define FILE_PATH_DOWNLOAD "/home/valex/workspace/spolks/out/file.webm"
+#define FILE_PATH_UPLOAD "/home/valex/workspace/spolks/in/file.mp4"
+#define FILE_PATH_DOWNLOAD "/home/valex/workspace/spolks/out/file.mp4"
 #define INVALID_SOCKET -1
 #define SOCKET_ERROR -1
 typedef int SOCKET;
@@ -35,7 +36,7 @@ typedef int SOCKET;
 #define COMMAND_LENGTH 128
 #define COMMAND_SIZE 4
 #define MAX_SEQ_NUMB 4
-
+#define LOGGING false
 enum Type {
 	CLIENT, SERVER
 };
@@ -482,13 +483,14 @@ void echoCommand(Type type, SOCKET socket) {
 int uploadCommand(Type type, SOCKET socket) {
 	FILE *file;
 	int nowRecv, size, nowReaded = 0, readed = 0;
+    time_t first_tape, second_tape;
 
 	if (type == CLIENT) {
 		file = fopen(FILE_PATH_UPLOAD, "r+b");
 		fseek(file, 0, SEEK_END);
 		size = ftell(file);
         fseek(file, 0, SEEK_SET);
-
+        time(&first_tape);
 		while ((nowReaded = fread(buffer, 1, sizeof(buffer), file)) != 0) {
 			readed += nowReaded;
             if (_send(socket, buffer, nowReaded, protocol) == -1) {
@@ -504,6 +506,8 @@ int uploadCommand(Type type, SOCKET socket) {
             fclose(file);
             return -1;
         }
+        time(&second_tape);
+        printf("Speed : %.2lfMB/s\n", ((double)size) / ((second_tape - first_tape) * 1024 * 1024) );
 	}
 	else {
 		file = fopen(FILE_PATH_DOWNLOAD, "wb");
@@ -528,6 +532,7 @@ int uploadCommand(Type type, SOCKET socket) {
 int downloadCommand(Type type, SOCKET socket) {
 	FILE *file;
 	int nowRecv, size, readed, nowReaded = 0;
+    time_t first_tape, second_tape;
 	if (type == CLIENT) {
 		file = fopen(FILE_PATH_DOWNLOAD, "wb");
 
@@ -537,7 +542,7 @@ int downloadCommand(Type type, SOCKET socket) {
             return -1;
         }
 		size = atoi(buffer);
-
+        time(&first_tape);
         nowRecv = _recv(socket, buffer, protocol);
 		while (strncmp(buffer, "end", 3)) {
             if (nowRecv == -1) {
@@ -550,6 +555,8 @@ int downloadCommand(Type type, SOCKET socket) {
             nowRecv = _recv(socket, buffer, protocol);
 			//printf("[%1.00f/100]\r", (float)(((float)readed / (float)size) * 100));
 		}
+        time(&second_tape);
+        printf("Speed : %.2lfMB/s", ((double)size) / ((second_tape - first_tape) * 1024 * 1024) );
 		printf("\n");
 	}
 	else {
@@ -584,16 +591,18 @@ int downloadCommand(Type type, SOCKET socket) {
 
 ssize_t _send(SOCKET sock, const char* buf, unsigned char len, Protocol protocol) {
 	int nowSend, nowRecv = -1;
-    char ok[2] = "o";
+    char ok[2];
 	if (protocol == TCP) {
         send(sock, &len, 1, MSG_OOB);
 		nowSend = send(sock, buf, (size_t)len, 0);
         if (nowSend != (ssize_t)len) {
             return -1;
         }
-        printf("%d bytes sent\n", nowSend);
+        if (LOGGING)
+            printf("%d bytes sent\n", nowSend);
         nowRecv = recv(sock, ok, 2, 0);
-        printf("%d bytes received\n", nowRecv);
+        if (LOGGING)
+            printf("%d bytes received\n", nowRecv);
         if (strcmp(ok, OK_MSG)) {
             return -1;
         }
@@ -603,13 +612,17 @@ ssize_t _send(SOCKET sock, const char* buf, unsigned char len, Protocol protocol
         while (nowRecv == -1)
         {
             nowSend = sendto(sock, &seq_number, 1, 0, (struct sockaddr*) &lastClientSockAddr, slen);
-            printf("%d bytes sent\n", nowSend);
+            if (LOGGING)
+                printf("%d bytes sent\n", nowSend);
             nowSend = sendto(sock, &len, 1, 0, (struct sockaddr*) &lastClientSockAddr, slen);
-            printf("%d bytes sent\n", nowSend);
+            if (LOGGING)
+                printf("%d bytes sent\n", nowSend);
             nowSend = sendto(sock, buf, len, 0, (struct sockaddr*) &lastClientSockAddr, slen);
-            printf("%d bytes sent\n", nowSend);
+            if (LOGGING)
+                printf("%d bytes sent\n", nowSend);
             nowRecv = recvfrom(sock, ok, 2, 0, (struct sockaddr*) &lastClientSockAddr, &slen);
-            printf("%d bytes received\n", nowRecv);
+            if (LOGGING)
+                printf("%d bytes received\n", nowRecv);
         }
         inc_seq_numb(seq_number);
     }
@@ -625,9 +638,11 @@ ssize_t _recv(SOCKET sock, char* buf, Protocol protocol) {
         if (nowRecv != (ssize_t)len) {
             return -1;
         }
-        printf("%d bytes received\n", nowRecv);
+        if (LOGGING)
+            printf("%d bytes received\n", nowRecv);
         nowSend = send(sock, OK_MSG, 2, 0);
-        printf("%d bytes sent\n", nowSend);
+        if (LOGGING)
+            printf("%d bytes sent\n", nowSend);
 	}
 	else {
 		socklen_t slen;
@@ -636,13 +651,16 @@ ssize_t _recv(SOCKET sock, char* buf, Protocol protocol) {
         {
             nowRecv = recvfrom(sock, &recv_seq, 1, 0, (struct sockaddr*) &lastClientSockAddr, &slen);
             if (nowRecv == -1) continue;
-            printf("%d bytes received\n", nowRecv);
+            if (LOGGING)
+                printf("%d bytes received\n", nowRecv);
             nowRecv = recvfrom(sock, &len, 1, 0, (struct sockaddr*) &lastClientSockAddr, &slen);
             if (nowRecv == -1) continue;
-            printf("%d bytes received\n", nowRecv);
+            if (LOGGING)
+                printf("%d bytes received\n", nowRecv);
             nowRecv = recvfrom(sock, buf, len, 0, (struct sockaddr*) &lastClientSockAddr, &slen);
         }
-        printf("%d bytes received\n", nowRecv);
+        if (LOGGING)
+            printf("%d bytes received\n", nowRecv);
         switch (comp_seq_numb(recv_seq, seq_number)) {
         case 0:
             inc_seq_numb(seq_number);
@@ -655,7 +673,8 @@ ssize_t _recv(SOCKET sock, char* buf, Protocol protocol) {
             return -1;
         }
 		nowSend = sendto(sock, OK_MSG, 2, 0, (struct sockaddr*) &lastClientSockAddr, slen);
-        printf("%d bytes sent\n", nowSend);
+        if (LOGGING)
+            printf("%d bytes sent\n", nowSend);
 	}
 
 	return nowRecv;
@@ -668,7 +687,6 @@ void inc_seq_numb(unsigned char &cur_seq_number) {
     else {
         cur_seq_number++;
     }
-    printf("New seq number %d\n", int(seq_number));
 }
 
 int comp_seq_numb(unsigned char first, unsigned char second) {
