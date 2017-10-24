@@ -212,36 +212,35 @@ SOCKET configureUDP(Type type, char *ip) {
 }
 
 void tcpServer(SOCKET serverSock) {
-	bool exit = false;
 
 	SOCKET connectedSock;
 	struct sockaddr_in connectedSockAddr;
 	socklen_t sockAddrLen = sizeof(struct sockaddr_in);
-    connectedSock = accept(serverSock, (struct sockaddr*)&connectedSockAddr, &sockAddrLen);
-	if (connectedSock == INVALID_SOCKET) {
-		printError("accept() error:");
-		closeSocket(serverSock);
-		return;
-	}
-	printf("Client(%s) connected\n", inet_ntoa(connectedSockAddr.sin_addr));
+    while (true) {
+        connectedSock = accept(serverSock, (struct sockaddr*)&connectedSockAddr, &sockAddrLen);
+        if (connectedSock == INVALID_SOCKET) {
+            printError("accept() error:");
+            closeSocket(serverSock);
+            return;
+        }
+        printf("Client(%s) connected\n", inet_ntoa(connectedSockAddr.sin_addr));
 
-	connectedSock = setupKeepalive(connectedSock);
-	if (connectedSock == -1) {
-		printError("keepalive() error:");
-		closeSocket(serverSock);
-        return;
-	}
-    while (!exit) {
-        serverListener(connectedSock);
+        connectedSock = setupKeepalive(connectedSock);
+        if (connectedSock == -1) {
+            printError("keepalive() error:");
+            closeSocket(serverSock);
+            return;
+        }
+        while (serverListener(connectedSock) != -1) {}
+        printf("Client(%s) disconnected\n", inet_ntoa(connectedSockAddr.sin_addr));
     }
 }
 
 void udpServer(SOCKET serverSock) {
-	bool exit = false;
-
-	while (!exit) {
-		serverListener(serverSock);
-	}
+    while (true) {
+        while (serverListener(serverSock) != -1){}
+        printf("Client(%s) disconnected\n", inet_ntoa(lastClientSockAddr.sin_addr));
+    }
 }
 
 int serverListener(SOCKET sock) {
@@ -278,7 +277,6 @@ int serverListener(SOCKET sock) {
     }
     else if (!strncmp(buffer, "CLOSE", 5)) {
         printf("CLOSE command\n");
-        printf("Client(%s) disconnected\n", inet_ntoa(lastClientSockAddr.sin_addr));
         return -1;
     }
     else if (!strcmp(buffer, "UPLOAD")) {
@@ -482,7 +480,8 @@ void echoCommand(Type type, SOCKET socket) {
 
 int uploadCommand(Type type, SOCKET socket) {
 	FILE *file;
-	int nowRecv, size, nowReaded = 0, readed = 0;
+	int nowRecv, nowReaded = 0, readed = 0;
+    size_t size;
     time_t first_tape, second_tape;
 
 	if (type == CLIENT) {
@@ -531,7 +530,8 @@ int uploadCommand(Type type, SOCKET socket) {
 
 int downloadCommand(Type type, SOCKET socket) {
 	FILE *file;
-	int nowRecv, size, readed, nowReaded = 0;
+	int nowRecv, readed, nowReaded = 0;
+    size_t size;
     time_t first_tape, second_tape;
 	if (type == CLIENT) {
 		file = fopen(FILE_PATH_DOWNLOAD, "wb");
@@ -541,7 +541,8 @@ int downloadCommand(Type type, SOCKET socket) {
             fclose(file);
             return -1;
         }
-		size = atoi(buffer);
+		size = atol(buffer);
+        printf("%ld\n", size);
         time(&first_tape);
         nowRecv = _recv(socket, buffer, protocol);
 		while (strncmp(buffer, "end", 3)) {
