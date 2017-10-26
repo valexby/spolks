@@ -36,7 +36,7 @@ typedef int SOCKET;
 #define COMMAND_LENGTH 128
 #define COMMAND_SIZE 4
 #define MAX_SEQ_NUMB 4
-#define LOGGING false
+#define LOGGING true
 enum Type {
 	CLIENT, SERVER
 };
@@ -159,7 +159,7 @@ int configureServer(SOCKET &serverSock, char* ip) {
 	printf("listen() succes\n");
 
 	int t = 1;
-	setsockopt(serverSock, SOL_SOCKET, SO_REUSEADDR, (char*)t, sizeof(int));
+	setsockopt(serverSock, SOL_SOCKET, SO_REUSEADDR, &t, sizeof(int));
 
 	return 0;
 }
@@ -239,7 +239,7 @@ void tcpServer(SOCKET serverSock) {
 void udpServer(SOCKET serverSock) {
     while (true) {
         while (serverListener(serverSock) != -1){}
-        printf("Client(%s) disconnected\n", inet_ntoa(lastClientSockAddr.sin_addr));
+        seq_number = 0;
     }
 }
 
@@ -506,7 +506,7 @@ int uploadCommand(Type type, SOCKET socket) {
             return -1;
         }
         time(&second_tape);
-        printf("Speed : %.2lfMB/s\n", ((double)size) / ((second_tape - first_tape) * 1024 * 1024) );
+        printf("Speed : %.2lfKB/s\n", ((double)size) / ((second_tape - first_tape) * 1024) );
 	}
 	else {
 		file = fopen(FILE_PATH_DOWNLOAD, "wb");
@@ -557,7 +557,7 @@ int downloadCommand(Type type, SOCKET socket) {
 			//printf("[%1.00f/100]\r", (float)(((float)readed / (float)size) * 100));
 		}
         time(&second_tape);
-        printf("Speed : %.2lfMB/s", ((double)size) / ((second_tape - first_tape) * 1024 * 1024) );
+        printf("Speed : %.2lfKB/s", ((double)size) / ((second_tape - first_tape) * 1024) );
 		printf("\n");
 	}
 	else {
@@ -604,7 +604,7 @@ ssize_t _send(SOCKET sock, const char* buf, unsigned char len, Protocol protocol
         nowRecv = recv(sock, ok, 2, 0);
         if (LOGGING)
             printf("%d bytes received\n", nowRecv);
-        if (strcmp(ok, OK_MSG)) {
+        if (strncmp(ok, OK_MSG, 2)) {
             return -1;
         }
 	}
