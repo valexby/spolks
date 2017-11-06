@@ -1,14 +1,14 @@
-CC=g++
+CC=gcc
 CFLAGS=-c -Wall -Wpedantic -g -O0
 LDFLAGS=
-SOURCES=main.cpp workflow.cpp
-OBJECTS=$(SOURCES:.cpp=.o)
+SOURCES=main.c workflow.c
+OBJECTS=$(SOURCES:.c=.o)
 EXECUTABLE=lab
 
 $(EXECUTABLE): $(OBJECTS)
 	$(CC) $(LDFLAGS) $(OBJECTS) -o $@
 
-.cpp.o:
+.c.o:
 	$(CC) $(CFLAGS) $< -o $@
 
 clean:
