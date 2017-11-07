@@ -62,6 +62,7 @@ void closeSocket(SOCKET nooby) {
 }
 
 void printError(const char error_message[]) {
+	if (errno == 4) return;
 	printf("%s", error_message);
 	printf("%s\n", strerror(errno));
 }
@@ -110,8 +111,7 @@ int time_client(SOCKET socket) {
     return 0;
 }
 
-int echo_server(SOCKET socket) {
-    char buffer[MESSAGE_MAX_SIZE];
+int echo_server(SOCKET socket, char *buffer) {
     printf("ECHO command\n");
     if (tcp_send(socket, buffer + 5, strlen(buffer) - 5) == -1) {
         printError("Echo failed : ");

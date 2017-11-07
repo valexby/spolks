@@ -162,6 +162,7 @@ SOCKET configure_server(char* ip) {
 	ret = bind(server_sock, (struct sockaddr*)&server_sockAddr, sizeof(server_sockAddr));
 	if (ret == SOCKET_ERROR) {
 		printError("bind() error:");
+		if (errno == 98) exit(1);
 		closeSocket(server_sock);
 		return -1;
 	}
@@ -244,7 +245,6 @@ SOCKET connect_tcp(SOCKET server_sock, struct sockaddr_in *connected_sock_addr) 
     connected_sock = accept(server_sock, (struct sockaddr*)connected_sock_addr, &sockAddrLen);
     if (connected_sock == INVALID_SOCKET) {
         printError("accept() error:");
-        closeSocket(server_sock);
         return -1;
     }
     printf("Client(%s) connected\n", inet_ntoa(connected_sock_addr->sin_addr));
@@ -275,7 +275,7 @@ int serverListener(SOCKET sock) {
         return 0;
     }
     else if (!strncmp(buffer, "ECHO", 4)) {
-        echo_server(sock);
+        echo_server(sock, buffer);
         return 0;
     }
     else if (!strncmp(buffer, "CLOSE", 5)) {
@@ -309,7 +309,7 @@ void clientListener(SOCKET sock) {
 		command[strlen(command) - 1] = 0;
 
 		if (checkCommand(command)) {
-            if (tcp_send(sock, command, (unsigned char)strlen(command)) == -1 ) {
+            if (tcp_send(sock, command, strlen(command)) == -1 ) {
                 printError("Client failed : ");
                 continue;
             }

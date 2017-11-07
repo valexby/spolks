@@ -30,7 +30,7 @@ void init_sockaddr(struct sockaddr_in *sock, const char* ip);
 int time_client(SOCKET socket);
 int time_server(SOCKET socket);
 int echo_client(SOCKET socket);
-int echo_server(SOCKET socket);
+int echo_server(SOCKET socket, char* buffer);
 int upload_client(SOCKET socket);
 int upload_server(SOCKET socket);
 int download_client(SOCKET socket);
