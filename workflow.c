@@ -39,7 +39,7 @@ bool check_command(char* command) {
 			|| !strncmp(command, "UPLOAD", 6) || !strncmp(command, "DOWNLOAD", 8));
 }
 
-SOCKET setup_keepalive(SOCKET socket) {
+SOCKET setup_socket(SOCKET socket) {
 	int optval = 1;
 	socklen_t  optlen = sizeof(optval);
 
@@ -49,7 +49,7 @@ SOCKET setup_keepalive(SOCKET socket) {
 	return socket;
 }
 
-void printError(const char error_message[]) {
+void print_error(const char error_message[]) {
 	if (errno == 4) return;
 	perror(error_message);
 }
@@ -64,7 +64,6 @@ int time_server(SOCKET socket) {
     char* time = getCurrentTime();
     printf("TIME command\n");
     if (tcp_send(socket, time, (char)strlen(time)) == -1) {
-        printError("TIME failed : ");
         return -1;
     }
     return 0;
@@ -75,7 +74,6 @@ int time_client(SOCKET socket) {
     char buffer[MESSAGE_MAX_SIZE];
     received = tcp_recv(socket, buffer);
     if (received == -1) {
-        printError("TIME failed : ");
         return -1;
     }
     buffer[received] = '\0';
@@ -86,7 +84,6 @@ int time_client(SOCKET socket) {
 int echo_server(SOCKET socket, char *buffer) {
     printf("ECHO command\n");
     if (tcp_send(socket, buffer + 5, strlen(buffer) - 5) == -1) {
-        printError("Echo failed : ");
         return -1;
     }
     return 0;
@@ -96,7 +93,6 @@ int echo_client(SOCKET socket) {
     char buffer[MESSAGE_MAX_SIZE];
     int received = tcp_recv(socket, buffer);
     if (received == -1) {
-        printError("ECHO failed : ");
         return -1;
     }
     buffer[received] = '\0';
@@ -116,7 +112,7 @@ int upload_client(SOCKET socket, char *filename) {
 
     file = fopen(filename, "r+b");
 	if (file == NULL) {
-		printError("Cannot open file ");
+		print_error("Cannot open file ");
 		return -1;
 	}
     fseek(file, 0, SEEK_END);
@@ -126,7 +122,6 @@ int upload_client(SOCKET socket, char *filename) {
     while ((readed = fread(buffer, 1, sizeof(buffer), file)) != 0) {
         total += readed;
         if (tcp_send(socket, buffer, readed) == -1) {
-            printError("Upload aborted : ");
             fclose(file);
             return -1;
         }
@@ -134,7 +129,6 @@ int upload_client(SOCKET socket, char *filename) {
     }
     printf("\n");
     if (tcp_send(socket, END_MSG, 3) == -1) {
-        printError("Upload aborted : ");
         fclose(file);
         return -1;
     }
@@ -152,14 +146,13 @@ int upload_server(SOCKET socket, char *filename) {
     printf("UPLOAD command\n");
 	file = fopen(filename, "wb");
 	if (file == NULL) {
-		printError("Cannot open file ");
+		print_error("Cannot open file ");
 		return -1;
 	}
     received = tcp_recv(socket, buffer);
     while (strncmp(buffer, END_MSG, 3))
     {
         if (received < 0) {
-            printError("Upload aborted : ");
             fclose(file);
             return -1;
         }
@@ -179,14 +172,13 @@ int download_server(SOCKET socket, char *filename)
     printf("DOWNLOAD command\n");
 	file = fopen(filename, "r+b");
 	if (file == NULL) {
-		printError("Cannot open file ");
+		print_error("Cannot open file ");
 		return -1;
 	}
 
     fseek(file, 0, SEEK_END);
     sprintf(buffer, "%ld", ftell(file));
     if (tcp_send(socket, buffer, (unsigned char)strlen(buffer)) == -1) {
-        printError("Download aborted : ");
         fclose(file);
         return -1;
     }
@@ -194,13 +186,11 @@ int download_server(SOCKET socket, char *filename)
 
     while ((readed = fread(buffer, 1, sizeof(buffer), file)) != 0) {
         if (tcp_send(socket, buffer, readed) <= 0) {
-            printError("Download aborted : ");
             fclose(file);
             return -1;
         }
     }
     if (tcp_send(socket, END_MSG, 3) == -1) {
-        printError("Download aborted : ");
         fclose(file);
         return -1;
     }
@@ -219,11 +209,10 @@ int download_client(SOCKET socket, char *filename)
 
     file = fopen(filename, "wb");
 	if (file == NULL) {
-		printError("Cannot open file ");
+		print_error("Cannot open file ");
 		return -1;
 	}
     if (tcp_recv(socket, buffer) == -1) {
-        printError("Download aborted : ");
         fclose(file);
         return -1;
     }
@@ -232,7 +221,6 @@ int download_client(SOCKET socket, char *filename)
     received = tcp_recv(socket, buffer);
     while (strncmp(buffer, "end", 3)) {
         if (received == -1) {
-            printError("Download aborted : ");
             fclose(file);
             return -1;
         }
@@ -278,7 +266,9 @@ int tcp_send(SOCKET sock, const char* buf, size_t len) {
 int tcp_recv(SOCKET sock, char* buf) {
 	int received = -1, sent;
     size_t len = 0;
-    while (recv(sock, &len, sizeof(len), 0) == -1) {};
+    if (recv(sock, &len, sizeof(len), 0) != sizeof(len)) {
+		return -1;
+	}
     received = recv(sock, buf, len, 0);
     if (received != (ssize_t)len) {
         return -1;
@@ -287,6 +277,9 @@ int tcp_recv(SOCKET sock, char* buf) {
         printf("%d bytes received\n", received);
     }
     sent = send(sock, OK_MSG, 2, 0);
+	if (sent != 2) {
+		return -1;
+	}
     if (LOGGING) {
         printf("%d bytes sent\n", sent);
     }

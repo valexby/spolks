@@ -18,8 +18,8 @@ typedef int SOCKET;
 void printHelp();
 char* getCurrentTime();
 bool check_command(char* command);
-void printError(const char[]);
-SOCKET setup_keepalive(SOCKET);
+void print_error(const char[]);
+SOCKET setup_socket(SOCKET);
 void init_sockaddr(struct sockaddr_in *sock, const char* ip);
 
 int time_client(SOCKET socket);

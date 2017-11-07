@@ -12,6 +12,7 @@
 #include <errno.h>
 #include <unistd.h>
 #include <signal.h>
+#include <fcntl.h>
 #include "workflow.h"
 
 #define SLAVES_NUMBER 3
@@ -33,19 +34,25 @@ void master_process(char* ip);
 static void send_fd(int socket, int fd);
 static int recv_fd(int socket);
 void free_slaves(int sig, siginfo_t *siginfo, void *context);
+void sig_handler(int signo);
 
 int max_sd = 0;
 struct slave slaves[SLAVES_NUMBER];
 int free_slaves_numb = SLAVES_NUMBER;
+bool interrupted = false;
 
 int main(int argc, char* argv[]) {
-    SOCKET clientSock;
+    SOCKET client_sock;
     SOCKET server_sock;
 	pid_t parent = getpid();
+	unsigned char flag = 1;
 	struct sigaction act;
 	memset (&act, '\0', sizeof(act));
 	act.sa_sigaction = &free_slaves;
 	act.sa_flags = SA_SIGINFO;
+	signal(SIGURG, sig_handler);
+	signal(SIGUSR2, sig_handler);
+	signal(SIGPIPE, sig_handler);
 	if (sigaction(SIGUSR1, &act, NULL) < 0) {
 		perror ("sigaction");
 	}
@@ -60,20 +67,38 @@ int main(int argc, char* argv[]) {
 		sleep(1);
 		while (true) {
 			SOCKET connected_sock = recv_fd(ret);
+			fcntl(connected_sock, F_SETOWN, getpid());
 			while (server_listener(connected_sock) != -1) {}
 			kill(parent, SIGUSR1);
+			if (interrupted) {
+				interrupted = false;
+			} else {
+				send(connected_sock, &flag, 1, MSG_OOB);
+			}
+			shutdown(connected_sock, SHUT_RDWR);
+			close(connected_sock);
 		}
 		close(server_sock);
     }
     else if (!strcmp(argv[1], "client")) {
-		if ((clientSock = configure_client(argv[2])) != -1) {
-			client_listener(clientSock);
+		if ((client_sock = configure_client(argv[2])) != -1) {
+			client_listener(client_sock);
 		}
-		close(clientSock);
+		if (interrupted) {
+			interrupted = false;
+		} else {
+			send(client_sock, &flag, 1, MSG_OOB);
+		}
+		shutdown(client_sock, SHUT_RDWR);
+		close(client_sock);
     }
     return 0;
 }
 
+void sig_handler(int signo) {
+	printf("Connection was closed\n");
+	interrupted = true;
+}
 
 int make_slaves(void) {
     int pid;
@@ -81,10 +106,10 @@ int make_slaves(void) {
 
     for (int i = 0; i < SLAVES_NUMBER; i++) {
 		if (socketpair(AF_UNIX, SOCK_DGRAM, 0, sv) != 0)
-			printError("Failed to create Unix-domain socket pair: ");
+			print_error("Failed to create Unix-domain socket pair: ");
         pid = fork();
         if (pid == -1) {
-            printError("fork() : ");
+            print_error("fork() : ");
             return -1;
         } else if (pid == 0) {
             return sv[1];
@@ -118,7 +143,7 @@ static void send_fd(int socket, int fd)
     msg.msg_controllen = cmsg->cmsg_len;
 
     if (sendmsg(socket, &msg, 0) < 0)
-        printError("Failed to send message: ");
+        print_error("Failed to send message: ");
 }
 
 static int recv_fd(int socket)  // receive fd from socket
@@ -135,7 +160,7 @@ static int recv_fd(int socket)  // receive fd from socket
     msg.msg_controllen = sizeof(c_buffer);
 
     if (recvmsg(socket, &msg, 0) < 0)
-        printError("Failed to receive message: ");
+        print_error("Failed to receive message: ");
 
     struct cmsghdr * cmsg = CMSG_FIRSTHDR(&msg);
 
@@ -162,7 +187,7 @@ SOCKET configure_server(char* ip) {
 	int ret;
 	ret = bind(server_sock, (struct sockaddr*)&server_sockAddr, sizeof(server_sockAddr));
 	if (ret == SOCKET_ERROR) {
-		printError("bind() error:");
+		print_error("bind() error:");
 		if (errno == 98) exit(1);
 		close(server_sock);
 		return -1;
@@ -171,7 +196,7 @@ SOCKET configure_server(char* ip) {
 
 	ret = listen(server_sock, 1);
 	if (ret == SOCKET_ERROR) {
-		printError("listen() error:");
+		print_error("listen() error:");
 		close(server_sock);
 		return -1;
 	}
@@ -192,15 +217,16 @@ SOCKET configure_client(char* ip) {
 	printf("Connection to the server\n");
 	int ret = connect(client_sock, (struct sockaddr*)&client_sock_addr, sizeof(client_sock_addr));
 	if (ret == SOCKET_ERROR) {
-		printError("connect() error:");
+		print_error("connect() error:");
 		return -1;
 	}
 	printf("Connected\n");
-	client_sock = setup_keepalive(client_sock);
+	client_sock = setup_socket(client_sock);
 	if (client_sock == -1) {
-		printError("keepalive() error:");
+		print_error("keepalive() error:");
 		return -1;
 	}
+	fcntl(client_sock, F_SETOWN, getpid());
 
 	return client_sock;
 }
@@ -246,14 +272,14 @@ SOCKET connect_tcp(SOCKET server_sock, struct sockaddr_in *connected_sock_addr) 
 	socklen_t sockAddrLen = sizeof(struct sockaddr_in);
     connected_sock = accept(server_sock, (struct sockaddr*)connected_sock_addr, &sockAddrLen);
     if (connected_sock == INVALID_SOCKET) {
-        printError("accept() error:");
+        print_error("accept() error:");
         return -1;
     }
     printf("Client(%s) connected\n", inet_ntoa(connected_sock_addr->sin_addr));
 
-    connected_sock = setup_keepalive(connected_sock);
+    connected_sock = setup_socket(connected_sock);
     if (connected_sock == -1) {
-        printError("keepalive() error:");
+        print_error("keepalive() error:");
         close(server_sock);
         return -1;
     }
@@ -261,24 +287,22 @@ SOCKET connect_tcp(SOCKET server_sock, struct sockaddr_in *connected_sock_addr) 
 }
 
 int server_listener(SOCKET sock) {
-	int received;
+	int received, ret;
     char buffer[MESSAGE_MAX_SIZE], *in, *out;
 
     received = tcp_recv(sock, buffer);
     if (received == -1) {
-        printError("Server failure : ");
+        print_error("Server failure : ");
         return -1;
     }
 
     buffer[received] = '\0';
 
     if (!strncmp(buffer, "TIME", 4)) {
-        time_server(sock);
-        return 0;
+        ret = time_server(sock);
     }
     else if (!strncmp(buffer, "ECHO", 4)) {
-        echo_server(sock, buffer);
-        return 0;
+        ret = echo_server(sock, buffer);
     }
     else if (!strncmp(buffer, "CLOSE", 5)) {
         printf("CLOSE command\n");
@@ -288,27 +312,26 @@ int server_listener(SOCKET sock) {
 		strtok(buffer, " ");
 		in = strtok(NULL, " ");
 		out = strtok(NULL, " ");
-        if (upload_server(sock, out) == -1) {
-            return -1;
-        }
-        return 0;
+        ret = upload_server(sock, out) == -1;
     }
 
     else if (!strncmp(buffer, "DOWNLOAD", 8)) {
 		strtok(buffer, " ");
 		in = strtok(NULL, " ");
 		out = strtok(NULL, " ");
-        if (download_server(sock, in) == -1) {
-            return -1;
-        }
-        return 0;
+		ret = download_server(sock, in);
     }
+	if (ret == -1) {
+		printf("Aborted\n");
+		return -1;
+	}
 	return 0;
 }
 
 void client_listener(SOCKET sock) {
 	char *in, *out;
 	char command[COMMAND_LENGTH];
+	int ret;
 	printHelp();
 
 	while (strncmp(command, "CLOSE", 5)) {
@@ -320,27 +343,31 @@ void client_listener(SOCKET sock) {
 			continue;
 		}
 		if (tcp_send(sock, command, strlen(command)) == -1 ) {
-			printError("Client failed : ");
+			print_error("Client failed : ");
 			continue;
 		}
 
 		if (!strcmp(command, "TIME")) {
-			time_client(sock);
+			ret = time_client(sock);
 		}
 		else if (!strncmp(command, "ECHO", 4)) {
-			echo_client(sock);
+			ret = echo_client(sock);
 		}
 		else if (!strncmp(command, "UPLOAD", 6)) {
 			strtok(command, " ");
 			in = strtok(NULL, " ");
 			out = strtok(NULL, " ");
-			upload_client(sock, in);
+			ret = upload_client(sock, in);
 		}
 		else if (!strncmp(command, "DOWNLOAD", 8)) {
 			strtok(command, " ");
 			in = strtok(NULL, " ");
 			out = strtok(NULL, " ");
-			download_client(sock, out);
+			ret = download_client(sock, out);
+		}
+		if (ret == -1) {
+			printf("Aborted\n");
+			break;
 		}
 	}
 }
