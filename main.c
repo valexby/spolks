@@ -24,9 +24,9 @@ struct slave {
 };
 
 SOCKET configure_server(char* ip);
-SOCKET configureClient(char* ip);
-int serverListener(SOCKET server_sock);
-void clientListener(SOCKET sock);
+SOCKET configure_client(char* ip);
+int server_listener(SOCKET server_sock);
+void client_listener(SOCKET sock);
 SOCKET connect_tcp(SOCKET server_sock, struct sockaddr_in *connected_sock_addr);
 int make_slaves(void);
 void master_process(char* ip);
@@ -60,17 +60,16 @@ int main(int argc, char* argv[]) {
 		sleep(1);
 		while (true) {
 			SOCKET connected_sock = recv_fd(ret);
-			while (serverListener(connected_sock) != -1) {}
+			while (server_listener(connected_sock) != -1) {}
 			kill(parent, SIGUSR1);
-			printf("Client disconnected\n");
 		}
-		closeSocket(server_sock);
+		close(server_sock);
     }
     else if (!strcmp(argv[1], "client")) {
-		if ((clientSock = configureClient(argv[2])) != -1) {
-			clientListener(clientSock);
+		if ((clientSock = configure_client(argv[2])) != -1) {
+			client_listener(clientSock);
 		}
-		closeSocket(clientSock);
+		close(clientSock);
     }
     return 0;
 }
@@ -151,8 +150,10 @@ static int recv_fd(int socket)  // receive fd from socket
 SOCKET configure_server(char* ip) {
 	SOCKET server_sock;
 	struct sockaddr_in server_sockAddr;
-	server_sock = createSocket();
-	if (!validate(server_sock, -1, server_sock, "socket()")) {
+	server_sock = socket(AF_INET, SOCK_STREAM, 0);
+	if (server_sock == -1) {
+		perror("Cannot create socket : ");
+		close(server_sock);
 		return -1;
 	}
 
@@ -163,7 +164,7 @@ SOCKET configure_server(char* ip) {
 	if (ret == SOCKET_ERROR) {
 		printError("bind() error:");
 		if (errno == 98) exit(1);
-		closeSocket(server_sock);
+		close(server_sock);
 		return -1;
 	}
 	printf("bind() succes\n");
@@ -171,7 +172,7 @@ SOCKET configure_server(char* ip) {
 	ret = listen(server_sock, 1);
 	if (ret == SOCKET_ERROR) {
 		printError("listen() error:");
-		closeSocket(server_sock);
+		close(server_sock);
 		return -1;
 	}
 	printf("listen() succes\n");
@@ -182,26 +183,26 @@ SOCKET configure_server(char* ip) {
 	return server_sock;
 }
 
-SOCKET configureClient(char* ip) {
-	SOCKET clientSock = createSocket();
+SOCKET configure_client(char* ip) {
+	SOCKET client_sock = socket(AF_INET, SOCK_STREAM, 0);
 
-	struct sockaddr_in clientSockAddr;
-	init_sockaddr(&clientSockAddr, ip);
+	struct sockaddr_in client_sock_addr;
+	init_sockaddr(&client_sock_addr, ip);
 
 	printf("Connection to the server\n");
-	int ret = connect(clientSock, (struct sockaddr*)&clientSockAddr, sizeof(clientSockAddr));
+	int ret = connect(client_sock, (struct sockaddr*)&client_sock_addr, sizeof(client_sock_addr));
 	if (ret == SOCKET_ERROR) {
 		printError("connect() error:");
 		return -1;
 	}
 	printf("Connected\n");
-	clientSock = setupKeepalive(clientSock);
-	if (clientSock == -1) {
+	client_sock = setup_keepalive(client_sock);
+	if (client_sock == -1) {
 		printError("keepalive() error:");
 		return -1;
 	}
 
-	return clientSock;
+	return client_sock;
 }
 
 void free_slaves(int sig, siginfo_t *siginfo, void *context) {
@@ -212,6 +213,7 @@ void free_slaves(int sig, siginfo_t *siginfo, void *context) {
 			pos++;
 		}
 		slaves[pos].busy = false;
+		printf("Client(%s) disconected\n", inet_ntoa(slaves[pos].sock_addr.sin_addr));
 		free_slaves_numb++;
 	}
 }
@@ -249,18 +251,18 @@ SOCKET connect_tcp(SOCKET server_sock, struct sockaddr_in *connected_sock_addr) 
     }
     printf("Client(%s) connected\n", inet_ntoa(connected_sock_addr->sin_addr));
 
-    connected_sock = setupKeepalive(connected_sock);
+    connected_sock = setup_keepalive(connected_sock);
     if (connected_sock == -1) {
         printError("keepalive() error:");
-        closeSocket(server_sock);
+        close(server_sock);
         return -1;
     }
     return connected_sock;
 }
 
-int serverListener(SOCKET sock) {
+int server_listener(SOCKET sock) {
 	int received;
-    char buffer[MESSAGE_MAX_SIZE];
+    char buffer[MESSAGE_MAX_SIZE], *in, *out;
 
     received = tcp_recv(sock, buffer);
     if (received == -1) {
@@ -282,15 +284,21 @@ int serverListener(SOCKET sock) {
         printf("CLOSE command\n");
         return -1;
     }
-    else if (!strcmp(buffer, "UPLOAD")) {
-        if (upload_server(sock) == -1) {
+    else if (!strncmp(buffer, "UPLOAD", 6)) {
+		strtok(buffer, " ");
+		in = strtok(NULL, " ");
+		out = strtok(NULL, " ");
+        if (upload_server(sock, out) == -1) {
             return -1;
         }
         return 0;
     }
 
-    else if (!strcmp(buffer, "DOWNLOAD")) {
-        if (download_server(sock) == -1) {
+    else if (!strncmp(buffer, "DOWNLOAD", 8)) {
+		strtok(buffer, " ");
+		in = strtok(NULL, " ");
+		out = strtok(NULL, " ");
+        if (download_server(sock, in) == -1) {
             return -1;
         }
         return 0;
@@ -298,41 +306,41 @@ int serverListener(SOCKET sock) {
 	return 0;
 }
 
-void clientListener(SOCKET sock) {
-	bool exit = false;
+void client_listener(SOCKET sock) {
+	char *in, *out;
+	char command[COMMAND_LENGTH];
 	printHelp();
 
-	while (!exit) {
+	while (strncmp(command, "CLOSE", 5)) {
 		printf(">");
-		char* command = (char*)malloc(COMMAND_LENGTH);
 		fgets(command, COMMAND_LENGTH, stdin);
 		command[strlen(command) - 1] = 0;
-
-		if (checkCommand(command)) {
-            if (tcp_send(sock, command, strlen(command)) == -1 ) {
-                printError("Client failed : ");
-                continue;
-            }
-
-            if (!strcmp(command, "TIME")) {
-                time_client(sock);
-            }
-            else if (!strncmp(command, "ECHO", 4)) {
-                echo_client(sock);
-            }
-            else if (!strcmp(command, "CLOSE")) {
-                exit = true;
-            }
-            else if (!strcmp(command, "UPLOAD")) {
-                upload_client(sock);
-            }
-            else if (!strcmp(command, "DOWNLOAD")) {
-                download_client(sock);
-            }
-		}
-		else {
+		if (!check_command(command)) {
 			printf("Wrong command\n");
+			continue;
 		}
-		free(command);
+		if (tcp_send(sock, command, strlen(command)) == -1 ) {
+			printError("Client failed : ");
+			continue;
+		}
+
+		if (!strcmp(command, "TIME")) {
+			time_client(sock);
+		}
+		else if (!strncmp(command, "ECHO", 4)) {
+			echo_client(sock);
+		}
+		else if (!strncmp(command, "UPLOAD", 6)) {
+			strtok(command, " ");
+			in = strtok(NULL, " ");
+			out = strtok(NULL, " ");
+			upload_client(sock, in);
+		}
+		else if (!strncmp(command, "DOWNLOAD", 8)) {
+			strtok(command, " ");
+			in = strtok(NULL, " ");
+			out = strtok(NULL, " ");
+			download_client(sock, out);
+		}
 	}
 }

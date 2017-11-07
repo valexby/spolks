@@ -34,12 +34,12 @@ char* getCurrentTime() {
 	return asctime(timeinfo);
 }
 
-bool checkCommand(char* command) {
+bool check_command(char* command) {
 	return (!strcmp(command, "CLOSE") || !strcmp(command, "TIME") || !strncmp(command, "ECHO", 4)
-		|| !strcmp(command, "UPLOAD") || !strcmp(command, "DOWNLOAD"));
+			|| !strncmp(command, "UPLOAD", 6) || !strncmp(command, "DOWNLOAD", 8));
 }
 
-SOCKET setupKeepalive(SOCKET socket) {
+SOCKET setup_keepalive(SOCKET socket) {
 	int optval = 1;
 	socklen_t  optlen = sizeof(optval);
 
@@ -49,37 +49,9 @@ SOCKET setupKeepalive(SOCKET socket) {
 	return socket;
 }
 
-SOCKET createSocket(void) {
-	SOCKET nooby;
-	if ((nooby = socket(AF_INET, SOCK_STREAM, 0)) == INVALID_SOCKET) {
-		return -1;
-	}
-	return nooby;
-}
-
-void closeSocket(SOCKET nooby) {
-	close(nooby);
-}
-
 void printError(const char error_message[]) {
 	if (errno == 4) return;
-	printf("%s", error_message);
-	printf("%s\n", strerror(errno));
-}
-
-bool validate(int value, int failed, SOCKET nooby, const char func_name[]) {
-	char* msg = (char*)malloc(strlen(func_name) + 8);
-	memcpy(msg, func_name, strlen(func_name));
-	if (value == failed) {
-		msg[strlen(func_name) + 7] = 0;
-		printError(strcat(msg, " error:"));
-		closeSocket(nooby);
-		return false;
-	}
-
-	msg[strlen(func_name)] = 0;
-	printf("%s success\n", msg);
-	return true;
+	perror(error_message);
 }
 
 void init_sockaddr(struct sockaddr_in *sock, const char* ip) {
@@ -135,14 +107,18 @@ int echo_client(SOCKET socket) {
     return 0;
 }
 
-int upload_client(SOCKET socket) {
+int upload_client(SOCKET socket, char *filename) {
 	FILE *file;
 	int total = 0, readed = 0;
     size_t size;
     time_t first_tape, second_tape;
     char buffer[MESSAGE_MAX_SIZE];
 
-    file = fopen(FILE_PATH_UPLOAD, "r+b");
+    file = fopen(filename, "r+b");
+	if (file == NULL) {
+		printError("Cannot open file ");
+		return -1;
+	}
     fseek(file, 0, SEEK_END);
     size = ftell(file);
     fseek(file, 0, SEEK_SET);
@@ -168,13 +144,17 @@ int upload_client(SOCKET socket) {
     return 0;
 }
 
-int upload_server(SOCKET socket) {
+int upload_server(SOCKET socket, char *filename) {
 	FILE *file;
 	int received;
     char buffer[MESSAGE_MAX_SIZE];
-    file = fopen(FILE_PATH_DOWNLOAD, "wb");
 
     printf("UPLOAD command\n");
+	file = fopen(filename, "wb");
+	if (file == NULL) {
+		printError("Cannot open file ");
+		return -1;
+	}
     received = tcp_recv(socket, buffer);
     while (strncmp(buffer, END_MSG, 3))
     {
@@ -190,14 +170,19 @@ int upload_server(SOCKET socket) {
     return 0;
 }
 
-int download_server(SOCKET socket)
+int download_server(SOCKET socket, char *filename)
 {
 	FILE *file;
 	int readed = 0;
     char buffer[MESSAGE_MAX_SIZE];
-    printf("DOWNLOAD command\n");
 
-    file = fopen(FILE_PATH_UPLOAD, "r+b");
+    printf("DOWNLOAD command\n");
+	file = fopen(filename, "r+b");
+	if (file == NULL) {
+		printError("Cannot open file ");
+		return -1;
+	}
+
     fseek(file, 0, SEEK_END);
     sprintf(buffer, "%ld", ftell(file));
     if (tcp_send(socket, buffer, (unsigned char)strlen(buffer)) == -1) {
@@ -224,15 +209,19 @@ int download_server(SOCKET socket)
 
 }
 
-int download_client(SOCKET socket)
+int download_client(SOCKET socket, char *filename)
 {
 	FILE *file;
 	int received, readed;
     size_t size;
     time_t first_tape, second_tape;
     char buffer[MESSAGE_MAX_SIZE];
-    file = fopen(FILE_PATH_DOWNLOAD, "wb");
 
+    file = fopen(filename, "wb");
+	if (file == NULL) {
+		printError("Cannot open file ");
+		return -1;
+	}
     if (tcp_recv(socket, buffer) == -1) {
         printError("Download aborted : ");
         fclose(file);
@@ -267,7 +256,7 @@ int tcp_send(SOCKET sock, const char* buf, size_t len) {
         return -1;
     }
     if (LOGGING) {
-        printf("%d pytes sent\n", sent);
+        printf("%d bytes sent\n", sent);
     }
     sent = send(sock, buf, len, 0);
     if (sent != (ssize_t)len) {
