@@ -13,7 +13,7 @@ typedef int SOCKET;
 #define COMMAND_SIZE 4
 #define MAX_SEQ_NUMB 4
 #define PORT 8888
-#define LOGGING true
+#define LOGGING false
 
 void printHelp();
 char* getCurrentTime();

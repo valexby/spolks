@@ -15,7 +15,7 @@
 #include <fcntl.h>
 #include "workflow.h"
 
-#define SLAVES_NUMBER 3
+#define MAX_SLAVES_NUMBER 2
 
 struct slave {
     pid_t pid;
@@ -29,7 +29,7 @@ SOCKET configure_client(char* ip);
 int server_listener(SOCKET server_sock);
 void client_listener(SOCKET sock);
 SOCKET connect_tcp(SOCKET server_sock, struct sockaddr_in *connected_sock_addr);
-int make_slaves(void);
+int create_slave(void);
 void master_process(char* ip);
 static void send_fd(int socket, int fd);
 static int recv_fd(int socket);
@@ -37,14 +37,13 @@ void free_slaves(int sig, siginfo_t *siginfo, void *context);
 void sig_handler(int signo);
 
 int max_sd = 0;
-struct slave slaves[SLAVES_NUMBER];
-int free_slaves_numb = SLAVES_NUMBER;
+int slaves_number = 0;
+struct slave *slaves[MAX_SLAVES_NUMBER];
+int free_slaves_numb = 0;
 bool interrupted = false;
 
 int main(int argc, char* argv[]) {
     SOCKET client_sock;
-    SOCKET server_sock;
-	pid_t parent = getpid();
 	unsigned char flag = 1;
 	struct sigaction act;
 	memset (&act, '\0', sizeof(act));
@@ -57,28 +56,8 @@ int main(int argc, char* argv[]) {
 		perror ("sigaction");
 	}
     if (!strcmp(argv[1], "server")) {
-		int ret = make_slaves();
-		if (ret == 0) {
-			master_process(argv[2]);
-			return 0;
-		} else if (ret == -1) {
-			exit(-1);
-		}
-		sleep(1);
-		while (true) {
-			SOCKET connected_sock = recv_fd(ret);
-			fcntl(connected_sock, F_SETOWN, getpid());
-			while (server_listener(connected_sock) != -1) {}
-			kill(parent, SIGUSR1);
-			if (interrupted) {
-				interrupted = false;
-			} else {
-				send(connected_sock, &flag, 1, MSG_OOB);
-			}
-			shutdown(connected_sock, SHUT_RDWR);
-			close(connected_sock);
-		}
-		close(server_sock);
+		master_process(argv[2]);
+		return 0;
     }
     else if (!strcmp(argv[1], "client")) {
 		if ((client_sock = configure_client(argv[2])) != -1) {
@@ -100,25 +79,51 @@ void sig_handler(int signo) {
 	interrupted = true;
 }
 
-int make_slaves(void) {
+int create_slave(void) {
     int pid;
     int sv[2];
+	pid_t parent = getpid();
+	unsigned char flag = 1;
+	struct timeval timeout;
+	timeout.tv_sec = 30;
+	timeout.tv_usec = 0;
 
-    for (int i = 0; i < SLAVES_NUMBER; i++) {
-		if (socketpair(AF_UNIX, SOCK_DGRAM, 0, sv) != 0)
-			print_error("Failed to create Unix-domain socket pair: ");
-        pid = fork();
-        if (pid == -1) {
-            print_error("fork() : ");
-            return -1;
-        } else if (pid == 0) {
-            return sv[1];
-        }
-		slaves[i].busy = false;
-        slaves[i].pid = pid;
-        slaves[i].socket = sv[0];
-    }
-    return 0;
+	if (socketpair(AF_UNIX, SOCK_DGRAM, 0, sv) != 0)
+		print_error("Failed to create Unix-domain socket pair: ");
+	pid = fork();
+	if (pid == -1) {
+		print_error("fork() : ");
+		return -1;
+	} else if (pid != 0) {
+		slaves[slaves_number] = (struct slave*)malloc(sizeof(struct slave));
+		slaves[slaves_number]->busy = false;
+		slaves[slaves_number]->pid = pid;
+		slaves[slaves_number]->socket = sv[0];
+		slaves_number++;
+		free_slaves_numb++;
+		printf("Create new slave\nCurrent slaves number %d\n", slaves_number);
+		return 0;
+	}
+	setsockopt(sv[1], SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
+	sleep(1);
+	while (true) {
+		SOCKET connected_sock = recv_fd(sv[1]);
+		if (connected_sock == -1) {
+			close(sv[1]);
+			kill(parent, SIGUSR1);
+			exit(1);
+		}
+		fcntl(connected_sock, F_SETOWN, getpid());
+		while (server_listener(connected_sock) != -1) {}
+		kill(parent, SIGUSR1);
+		if (interrupted) {
+			interrupted = false;
+		} else {
+			send(connected_sock, &flag, 1, MSG_OOB);
+		}
+		shutdown(connected_sock, SHUT_RDWR);
+		close(connected_sock);
+	}
 }
 
 static void send_fd(int socket, int fd)
@@ -159,8 +164,9 @@ static int recv_fd(int socket)  // receive fd from socket
     msg.msg_control = c_buffer;
     msg.msg_controllen = sizeof(c_buffer);
 
-    if (recvmsg(socket, &msg, 0) < 0)
-        print_error("Failed to receive message: ");
+    if (recvmsg(socket, &msg, 0) < 0) {
+		return -1;
+	}
 
     struct cmsghdr * cmsg = CMSG_FIRSTHDR(&msg);
 
@@ -235,34 +241,51 @@ void free_slaves(int sig, siginfo_t *siginfo, void *context) {
 	int pos;
 	if (sig == SIGUSR1) {
 		pos = 0;
-		while (slaves[pos].pid != siginfo->si_pid) {
+		while (slaves[pos]->pid != siginfo->si_pid) {
 			pos++;
 		}
-		slaves[pos].busy = false;
-		printf("Client(%s) disconected\n", inet_ntoa(slaves[pos].sock_addr.sin_addr));
-		free_slaves_numb++;
+		if (slaves[pos]->busy) {
+			slaves[pos]->busy = false;
+			printf("Client(%s) disconected\n", inet_ntoa(slaves[pos]->sock_addr.sin_addr));
+			free_slaves_numb++;
+		} else {
+			struct slave *temp = slaves[pos];
+			printf("Slave with %d PID destroyed\n", slaves[pos]->pid);
+			slaves_number--;
+			free_slaves_numb--;
+			slaves[pos] = slaves[slaves_number];
+			free(temp);
+			printf("Current slaves number %d\n", slaves_number);
+		}
 	}
 }
 
 void master_process(char *ip) {
 	SOCKET connected_sock, socket;
     int free_pos;
+	struct sockaddr_in sock_addr;
 	socket = configure_server(ip);
     while (true) {
-        while (free_slaves_numb != 0) {
-            free_pos = 0;
-            while (slaves[free_pos].busy) {
-                free_pos++;
-            }
-            connected_sock = connect_tcp(socket, &(slaves[free_pos].sock_addr));
-			if (connected_sock == -1) {
-				continue;
+		connected_sock = connect_tcp(socket, &sock_addr);
+		if (connected_sock < 0) continue;
+		if (free_slaves_numb == 0) {
+			if (slaves_number == MAX_SLAVES_NUMBER) {
+				pause();
+			} else {
+				create_slave();
 			}
-            send_fd(slaves[free_pos].socket, connected_sock);
-			slaves[free_pos].busy = true;
-			free_slaves_numb--;
-        }
-		pause();
+		}
+		free_pos = 0;
+		while (slaves[free_pos]->busy) {
+			free_pos++;
+		}
+		slaves[free_pos]->sock_addr = sock_addr;
+		if (connected_sock == -1) {
+			continue;
+		}
+		send_fd(slaves[free_pos]->socket, connected_sock);
+		slaves[free_pos]->busy = true;
+		free_slaves_numb--;
     }
 }
 
